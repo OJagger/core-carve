@@ -319,6 +319,31 @@ class GeometryTab(QWidget):
         self.panel.btn_save_json.clicked.connect(self._save_json)
         self.panel.btn_update.clicked.connect(self._update_geometry)
 
+        # Auto-load test files on startup
+        self.load_test_files()
+
+    def load_test_files(self):
+        """Auto-load test DXF and JSON files (for development)."""
+        try:
+            from pathlib import Path
+            data_dir = Path(__file__).parent.parent / "data"
+            dxf_path = data_dir / "Ski_planform.dxf"
+            json_path = data_dir / "ski_params.json"
+
+            if dxf_path.exists():
+                self._outline = load_planform_dxf(str(dxf_path))
+                self.panel.lbl_dxf.setText(dxf_path.name)
+                self.panel.lbl_dxf.setStyleSheet("color: #60cc60;")
+
+            if json_path.exists():
+                params = SkiParams.from_json(str(json_path))
+                self.panel.set_params(params)
+
+            if self._outline is not None:
+                self._update_geometry()
+        except Exception:
+            pass  # Silent fail for test files
+
     # ── Slots ─────────────────────────────────────────────────────────────────
 
     def _load_dxf(self):
@@ -368,5 +393,12 @@ class GeometryTab(QWidget):
             self._geom = compute_geometry(self._outline, params)
             self.panel.update_derived(self._geom)
             self.canvas.plot_geometry(self._outline, self._geom, params)
+            # Notify parent window that geometry is ready
+            parent = self.parent()
+            while parent:
+                if hasattr(parent, '_check_geometry_loaded'):
+                    parent._check_geometry_loaded()
+                    break
+                parent = parent.parent()
         except Exception as exc:
             QMessageBox.critical(self, "Geometry Error", str(exc))
