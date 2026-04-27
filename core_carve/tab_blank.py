@@ -45,9 +45,11 @@ class BlankCanvas(FigureCanvas):
         self._setup_axes()
         ax = self.ax
 
-        # Core extends 25mm beyond the infill regions
-        core_start = geom.core_tip_x - 25.0
-        core_end = geom.core_tail_x + 25.0
+        # Core extends 25mm beyond the infill regions, but clamp to outline bounds
+        outline_y_min = geom.outline[:, 1].min()
+        outline_y_max = geom.outline[:, 1].max()
+        core_start = max(geom.core_tip_x - 25.0, outline_y_min)
+        core_end = min(geom.core_tail_x + 25.0, outline_y_max)
         core_extent = core_end - core_start
 
         # Center the core horizontally in the blank
@@ -139,8 +141,8 @@ class BlankCanvas(FigureCanvas):
             core_y = positions[0][1]
             sw_left = left_outline + core_y
             sw_right = right_outline + core_y
-            y_min = min(sw_left)
-            y_max = max(sw_right)
+            y_min = np.nanmin(sw_left)
+            y_max = np.nanmax(sw_right)
             ax.plot([trim_tip, trim_tip], [y_min, y_max], color="#ff8800", linewidth=1.5,
                    linestyle="--", label="Trim lines")
             ax.plot([trim_tail, trim_tail], [y_min, y_max], color="#ff8800", linewidth=1.5, linestyle="--")
@@ -151,8 +153,8 @@ class BlankCanvas(FigureCanvas):
             for core_y in [p[1] for p in positions]:
                 all_left.extend(left_outline + core_y)
                 all_right.extend(right_outline + core_y)
-            y_min = min(all_left)
-            y_max = max(all_right)
+            y_min = np.nanmin(all_left)
+            y_max = np.nanmax(all_right)
             ax.plot([trim_tip, trim_tip], [y_min, y_max], color="#ff8800", linewidth=1.5,
                    linestyle="--", label="Trim lines")
             ax.plot([trim_tail, trim_tail], [y_min, y_max], color="#ff8800", linewidth=1.5, linestyle="--")
@@ -281,8 +283,10 @@ class BlankParameterPanel(QWidget):
         """Calculate default core spacing based on ski geometry."""
         try:
             from core_carve.ski_geometry import half_widths_at_y
-            core_start = self.geom.core_tip_x - 25.0
-            core_end = self.geom.core_tail_x + 25.0
+            outline_y_min = self.geom.outline[:, 1].min()
+            outline_y_max = self.geom.outline[:, 1].max()
+            core_start = max(self.geom.core_tip_x - 25.0, outline_y_min)
+            core_end = min(self.geom.core_tail_x + 25.0, outline_y_max)
             y_samples = np.linspace(core_start, core_end, 100)
             left_w, right_w = half_widths_at_y(self.geom.outline, y_samples)
             max_half_width = max(np.nanmax(np.abs(left_w)), np.nanmax(np.abs(right_w)))

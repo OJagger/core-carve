@@ -98,16 +98,25 @@ class CoreBlank:
             )
 
         # Check if cores fit within blank after positioning
-        positions = self.get_core_positions(geom, params)
-        core_length = geom.core_tail_x - geom.core_tip_x + 50.0  # 25mm extension on each end
+        core_extent = geom.core_tail_x - geom.core_tip_x + 50.0  # 25mm extension on each end
+        core_start = geom.core_tip_x - 25.0
+
+        # The core is centered in the blank with x_offset
+        # In blank space: core spans from (blank.length - core_extent) / 2 to (blank.length + core_extent) / 2
+        # Check if core extent fits in blank, accounting for position offset
+        min_blank_pos = (self.length - core_extent) / 2 + self.position_offset_x
+        max_blank_pos = (self.length + core_extent) / 2 + self.position_offset_x
+
+        if min_blank_pos < 0 or max_blank_pos > self.length:
+            warnings.append(
+                f"Core extends outside blank length bounds (offset: {self.position_offset_x:.0f} mm)"
+            )
+
+        # Check core width
         core_width_half = 70.0  # rough estimate
+        positions = self.get_core_positions(geom, params)
 
         for i, (x, y) in enumerate(positions):
-            # Check along length
-            if x - core_length / 2.0 < 0 or x + core_length / 2.0 > self.length:
-                warnings.append(
-                    f"Core {i + 1} extends outside blank length bounds"
-                )
 
             # Check across width
             if abs(y) + core_width_half > self.width / 2.0:

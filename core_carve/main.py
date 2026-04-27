@@ -4,6 +4,7 @@ from PyQt5.QtCore import Qt
 
 from core_carve.tab_geometry import GeometryTab
 from core_carve.tab_blank import BlankTab
+from core_carve.tab_gcode import GcodeTab
 
 
 class MainWindow(QMainWindow):
@@ -19,18 +20,29 @@ class MainWindow(QMainWindow):
         self.geometry_tab = GeometryTab()
         self.tabs.addTab(self.geometry_tab, "1 · Geometry")
 
-        # Blank tab (created when geometry is loaded)
+        # Blank and G-code tabs (created when geometry is loaded)
         self.blank_tab = None
+        self.gcode_tab = None
 
         # Connect to geometry updates
         self.tabs.currentChanged.connect(self._check_geometry_loaded)
 
     def _check_geometry_loaded(self):
-        """Check if geometry is loaded and create blank tab if needed."""
-        if self.geometry_tab._geom is not None and self.blank_tab is None:
-            params = self.geometry_tab.panel.get_params()
+        """Check if geometry is loaded and create blank and G-code tabs if needed."""
+        if self.geometry_tab._geom is None:
+            return
+        params = self.geometry_tab.panel.get_params()
+        if self.blank_tab is None:
             self.blank_tab = BlankTab(self.geometry_tab._geom, params)
             self.tabs.addTab(self.blank_tab, "2 · Core Blank")
+            self.gcode_tab = GcodeTab(self.geometry_tab._geom, params, self.blank_tab)
+            self.tabs.addTab(self.gcode_tab, "3 · G-code")
+        else:
+            self.blank_tab.geom = self.geometry_tab._geom
+            self.blank_tab.params = params
+            self.blank_tab._update_layout()
+            self.gcode_tab.geom = self.geometry_tab._geom
+            self.gcode_tab.params = params
 
 
 def main():

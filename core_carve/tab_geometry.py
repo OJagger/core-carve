@@ -319,9 +319,6 @@ class GeometryTab(QWidget):
         self.panel.btn_save_json.clicked.connect(self._save_json)
         self.panel.btn_update.clicked.connect(self._update_geometry)
 
-        # Auto-load test files on startup
-        self.load_test_files()
-
     def load_test_files(self):
         """Auto-load test DXF and JSON files (for development)."""
         try:

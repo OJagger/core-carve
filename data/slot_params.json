@@ -1,0 +1,15 @@
+{
+  "tool_diameter": 6.35,
+  "spindle_speed": 18000,
+  "cutting_feed": 1000.0,
+  "plunge_feed": 300.0,
+  "rapid_feed": 2000.0,
+  "depth_per_pass": 1.5,
+  "stepover": 3.0,
+  "spoilboard_skim": 0.5,
+  "clearance_height": 5.0,
+  "stepover_direction": "conventional",
+  "tab_spacing": 100.0,
+  "tab_length": 10.0,
+  "tab_thickness": 1.0
+}
