@@ -1,0 +1,10 @@
+{
+  "tip_infill": 160.0,
+  "tail_infill": 80.0,
+  "sidewall_width": 6.0,
+  "sidewall_overlap": 2.0,
+  "tip_thickness": 2.0,
+  "underfoot_thickness": 10.0,
+  "tail_thickness": 2.0,
+  "underfoot_length": 300.0
+}

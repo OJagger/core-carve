@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "core-carve"
+version = "0.1.0"
+description = "G-code generator for CNC ski component manufacture"
+license = { text = "AGPL-3.0-or-later" }
+requires-python = ">=3.10"
+dependencies = [
+    "PyQt5",
+    "matplotlib",
+    "ezdxf",
+    "scipy",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = ["ruff", "pytest"]
+
+[project.scripts]
+core-carve = "core_carve.main:main"
+
+[tool.ruff]
+line-length = 100
