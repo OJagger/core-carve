@@ -74,6 +74,7 @@ def generate_slot_gcode(
         (gcode_string, moves_list)
     """
     from core_carve.ski_geometry import half_widths_at_y
+    from core_carve.core_blank import MachineOrientation, OriginCorner
 
     # Slot geometry: left and right edges of each core
     core_positions = blank.get_core_positions(geom, params)
@@ -81,6 +82,24 @@ def generate_slot_gcode(
     core_end = geom.core_tail_x + 25.0
     y_samples = np.linspace(core_start, core_end, 500)
     left_outline, right_outline = half_widths_at_y(geom.outline, y_samples)
+
+    # Function to transform coordinates based on machine origin and orientation
+    def transform_to_machine_space(x, y):
+        """Transform blank-space coords to machine coords based on origin and orientation."""
+        # Swap axes if ski runs along Y
+        if blank.machine_orientation == MachineOrientation.Y_AXIS:
+            x, y = y, x
+
+        # Flip based on origin corner
+        if blank.origin_corner == OriginCorner.TOP_LEFT:
+            y = blank.width - y
+        elif blank.origin_corner == OriginCorner.TOP_RIGHT:
+            x = blank.length - x
+            y = blank.width - y
+        elif blank.origin_corner == OriginCorner.BOTTOM_RIGHT:
+            x = blank.length - x
+
+        return x, y
 
     # Slot dimensions
     slot_width = params.sidewall_width
@@ -146,7 +165,8 @@ def generate_slot_gcode(
                 start_x = slot_y_samples[start_idx]
                 start_y = slot_centerline[start_idx] + width_offset
                 moves.append(Move(start_x, start_y, slot_params.clearance_height, is_rapid=True, feed=slot_params.rapid_feed))
-                gcode_lines.append(f"G00 X{start_x:.3f} Y{start_y:.3f}")
+                mach_x, mach_y = transform_to_machine_space(start_x, start_y)
+                gcode_lines.append(f"G00 X{mach_x:.3f} Y{mach_y:.3f}")
                 gcode_lines.append(f"G00 Z{slot_params.clearance_height:.3f}")
 
                 # Plunge
@@ -163,11 +183,15 @@ def generate_slot_gcode(
                     z = max(z_target, -(slot_depth - slot_params.tab_thickness)) if in_tab else z_target
                     feed = slot_params.cutting_feed
                     moves.append(Move(x, y, z, is_rapid=False, feed=feed))
-                    gcode_lines.append(f"G01 X{x:.3f} Y{y:.3f} Z{z:.3f} F{feed:.1f}")
+                    mach_x, mach_y = transform_to_machine_space(x, y)
+                    gcode_lines.append(f"G01 X{mach_x:.3f} Y{mach_y:.3f} Z{z:.3f} F{feed:.1f}")
 
                 # Rapid to clearance
                 end_idx = cut_indices[-1]
-                moves.append(Move(slot_y_samples[end_idx], slot_centerline[end_idx] + width_offset, slot_params.clearance_height, is_rapid=True, feed=slot_params.rapid_feed))
+                end_x, end_y = slot_y_samples[end_idx], slot_centerline[end_idx] + width_offset
+                moves.append(Move(end_x, end_y, slot_params.clearance_height, is_rapid=True, feed=slot_params.rapid_feed))
+                end_mach_x, end_mach_y = transform_to_machine_space(end_x, end_y)
+                gcode_lines.append(f"G00 X{end_mach_x:.3f} Y{end_mach_y:.3f}")
                 gcode_lines.append(f"G00 Z{slot_params.clearance_height:.3f}")
 
     # Postamble
