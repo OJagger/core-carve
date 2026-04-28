@@ -8,9 +8,9 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QLineEdit, QComboBox,
     QGroupBox, QFormLayout, QMessageBox, QScrollArea,
-    QSizePolicy,
+    QSizePolicy, QProgressBar,
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.patches as patches
@@ -21,6 +21,23 @@ from matplotlib.widgets import Button
 
 from core_carve.gcode_generator import SlotParams, generate_slot_gcode
 from core_carve.ski_geometry import SkiGeometry, half_widths_at_y
+
+
+class _GcodeWorker(QThread):
+    finished = pyqtSignal(str, list)
+    error = pyqtSignal(str)
+
+    def __init__(self, fn, *args):
+        super().__init__()
+        self._fn = fn
+        self._args = args
+
+    def run(self):
+        try:
+            result = self._fn(*self._args)
+            self.finished.emit(*result)
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 # ── Matplotlib canvas ──────────────────────────────────────────────────────────
@@ -490,10 +507,16 @@ class SlotParameterPanel(QWidget):
         button_lay.addWidget(self.btn_save_gcode)
         root.addLayout(button_lay)
 
-        # ── Validation ────────────────────────────────────────────────────────
+        # ── Status / progress ─────────────────────────────────────────────────
         self.lbl_validation = QLabel("✓ Ready")
         self.lbl_validation.setStyleSheet("color: #60cc60;")
         root.addWidget(self.lbl_validation)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)   # indeterminate
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setFixedHeight(12)
+        root.addWidget(self.progress_bar)
 
         root.addStretch()
 
@@ -664,30 +687,55 @@ class GcodeTab(QWidget):
                 self.panel.lbl_validation.setStyleSheet("color: #ff6060;")
 
     def _generate_gcode(self):
-        """Generate G-code and display toolpaths."""
+        """Start background G-code generation."""
         try:
             blank = self.blank_tab.panel.get_blank()
             slot_params = self.panel.get_params()
             x_offset = (blank.length - (self.geom.core_tail_x - self.geom.core_tip_x + 50)) / 2 - (self.geom.core_tip_x - 25)
-
-            self._gcode_string, self._moves = generate_slot_gcode(
-                self.geom, self.params, blank, slot_params, x_offset
-            )
-
-            # Initialize playback view
-            self.canvas._moves = self._moves
-            self.canvas._blank = blank
-            self.canvas._tool_diameter = slot_params.tool_diameter
-            self.canvas._playback_idx = 0
-            self.canvas._playback_speed_multiplier = 1
-            self.canvas._step_playback_frame()
-            self.lbl_speed.setText("1×")
-
-            self.panel.lbl_validation.setText(f"✓ G-code generated ({len(self._moves)} moves)")
-            self.panel.lbl_validation.setStyleSheet("color: #60cc60;")
         except Exception as e:
             self.panel.lbl_validation.setText(f"✗ Error: {str(e)}")
             self.panel.lbl_validation.setStyleSheet("color: #ff6060;")
+            return
+
+        self._pending_blank = blank
+        self._pending_slot_params = slot_params
+        self.panel.btn_generate.setEnabled(False)
+        self.panel.lbl_validation.setText("Generating G-code…")
+        self.panel.lbl_validation.setStyleSheet("color: #aaaaaa;")
+        self.panel.progress_bar.setVisible(True)
+
+        self._worker = _GcodeWorker(
+            generate_slot_gcode,
+            self.geom, self.params, blank, slot_params, x_offset
+        )
+        self._worker.finished.connect(self._on_gcode_ready)
+        self._worker.error.connect(self._on_gcode_error)
+        self._worker.start()
+
+    def _on_gcode_ready(self, gcode_string: str, moves: list):
+        self._gcode_string = gcode_string
+        self._moves = moves
+        blank = self._pending_blank
+        slot_params = self._pending_slot_params
+
+        self.canvas._moves = moves
+        self.canvas._blank = blank
+        self.canvas._tool_diameter = slot_params.tool_diameter
+        self.canvas._playback_idx = 0
+        self.canvas._playback_speed_multiplier = 1
+        self.canvas._step_playback_frame()
+        self.lbl_speed.setText("1×")
+
+        self.panel.btn_generate.setEnabled(True)
+        self.panel.progress_bar.setVisible(False)
+        self.panel.lbl_validation.setText(f"✓ G-code generated ({len(moves)} moves)")
+        self.panel.lbl_validation.setStyleSheet("color: #60cc60;")
+
+    def _on_gcode_error(self, msg: str):
+        self.panel.btn_generate.setEnabled(True)
+        self.panel.progress_bar.setVisible(False)
+        self.panel.lbl_validation.setText(f"✗ Error: {msg}")
+        self.panel.lbl_validation.setStyleSheet("color: #ff6060;")
 
     def _save_gcode(self):
         """Save G-code to file."""

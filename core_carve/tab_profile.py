@@ -7,9 +7,26 @@ import numpy as np
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QLineEdit, QGroupBox, QFormLayout,
-    QMessageBox, QScrollArea, QSizePolicy, QFileDialog, QComboBox,
+    QMessageBox, QScrollArea, QSizePolicy, QFileDialog, QComboBox, QProgressBar,
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt, QTimer, QThread, pyqtSignal
+
+
+class _GcodeWorker(QThread):
+    finished = pyqtSignal(str, list)
+    error = pyqtSignal(str)
+
+    def __init__(self, fn, *args):
+        super().__init__()
+        self._fn = fn
+        self._args = args
+
+    def run(self):
+        try:
+            result = self._fn(*self._args)
+            self.finished.emit(*result)
+        except Exception as e:
+            self.error.emit(str(e))
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.patches as patches
@@ -298,6 +315,12 @@ class ProfileParameterPanel(QWidget):
         self.lbl_status.setStyleSheet("color: #60cc60;")
         root.addWidget(self.lbl_status)
 
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setFixedHeight(12)
+        root.addWidget(self.progress_bar)
+
         root.addStretch()
 
     def get_params(self) -> ProfileParams:
@@ -395,27 +418,53 @@ class ProfileTab(QWidget):
         self.btn_toggle_3d.clicked.connect(self._toggle_3d_view)
 
     def _generate_gcode(self):
-        """Generate profiling G-code."""
+        """Start background G-code generation."""
         try:
             blank = self.blank_tab.panel.get_blank()
             profile_params = self.panel.get_params()
-
-            self._gcode_string, self._moves = generate_profile_gcode(
-                self.geom, self.params, blank, profile_params
-            )
-
-            self.canvas._moves = self._moves
-            self.canvas._blank = blank
-            self.canvas._tool_diameter = profile_params.tool_diameter
-            self.canvas._playback_idx = 0
-            self.canvas.plot_toolpaths(self._moves, blank)
-            self.lbl_speed.setText("1×")
-
-            self.panel.lbl_status.setText(f"✓ G-code generated ({len(self._moves)} moves)")
-            self.panel.lbl_status.setStyleSheet("color: #60cc60;")
         except Exception as e:
             self.panel.lbl_status.setText(f"✗ Error: {str(e)}")
             self.panel.lbl_status.setStyleSheet("color: #ff6060;")
+            return
+
+        self._pending_blank = blank
+        self._pending_profile_params = profile_params
+        self.panel.btn_generate.setEnabled(False)
+        self.panel.lbl_status.setText("Generating G-code…")
+        self.panel.lbl_status.setStyleSheet("color: #aaaaaa;")
+        self.panel.progress_bar.setVisible(True)
+
+        self._worker = _GcodeWorker(
+            generate_profile_gcode,
+            self.geom, self.params, blank, profile_params
+        )
+        self._worker.finished.connect(self._on_gcode_ready)
+        self._worker.error.connect(self._on_gcode_error)
+        self._worker.start()
+
+    def _on_gcode_ready(self, gcode_string: str, moves: list):
+        self._gcode_string = gcode_string
+        self._moves = moves
+        blank = self._pending_blank
+        profile_params = self._pending_profile_params
+
+        self.canvas._moves = moves
+        self.canvas._blank = blank
+        self.canvas._tool_diameter = profile_params.tool_diameter
+        self.canvas._playback_idx = 0
+        self.canvas.plot_toolpaths(moves, blank)
+        self.lbl_speed.setText("1×")
+
+        self.panel.btn_generate.setEnabled(True)
+        self.panel.progress_bar.setVisible(False)
+        self.panel.lbl_status.setText(f"✓ G-code generated ({len(moves)} moves)")
+        self.panel.lbl_status.setStyleSheet("color: #60cc60;")
+
+    def _on_gcode_error(self, msg: str):
+        self.panel.btn_generate.setEnabled(True)
+        self.panel.progress_bar.setVisible(False)
+        self.panel.lbl_status.setText(f"✗ Error: {msg}")
+        self.panel.lbl_status.setStyleSheet("color: #ff6060;")
 
     def _save_gcode(self):
         """Save G-code to file."""

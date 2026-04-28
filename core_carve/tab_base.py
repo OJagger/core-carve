@@ -7,13 +7,30 @@ import numpy as np
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QLineEdit, QGroupBox, QFormLayout,
-    QMessageBox, QScrollArea, QSizePolicy, QFileDialog, QComboBox,
+    QMessageBox, QScrollArea, QSizePolicy, QFileDialog, QComboBox, QProgressBar,
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from core_carve.base_design import BaseParams, compute_base_outline, export_base_dxf, compute_base_gcode
+
+
+class _GcodeWorker(QThread):
+    finished = pyqtSignal(str)
+    error = pyqtSignal(str)
+
+    def __init__(self, outline, params):
+        super().__init__()
+        self._outline = outline
+        self._params = params
+
+    def run(self):
+        try:
+            result = compute_base_gcode(self._outline, self._params)
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 # ── Canvas ────────────────────────────────────────────────────────────────────
@@ -182,6 +199,12 @@ class BaseParameterPanel(QWidget):
         self.lbl_status.setStyleSheet("color: #60cc60;")
         root.addWidget(self.lbl_status)
 
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 0)
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setFixedHeight(12)
+        root.addWidget(self.progress_bar)
+
         root.addStretch()
 
     def _on_cutter_changed(self, text: str):
@@ -307,15 +330,30 @@ class BaseTab(QWidget):
             QMessageBox.warning(self, "No outline", "Load outline from Outline Design tab first")
             return
 
-        try:
-            params = self.panel.get_params()
-            self._gcode_string = compute_base_gcode(self._outline, params)
-            n_lines = self._gcode_string.count("\n") + 1
-            self.panel.lbl_status.setText(f"✓ G-code generated ({n_lines} lines)")
-            self.panel.lbl_status.setStyleSheet("color: #60cc60;")
-        except Exception as e:
-            self.panel.lbl_status.setText(f"✗ Error: {str(e)}")
-            self.panel.lbl_status.setStyleSheet("color: #ff6060;")
+        params = self.panel.get_params()
+        self.panel.btn_generate_gcode.setEnabled(False)
+        self.panel.lbl_status.setText("Generating G-code…")
+        self.panel.lbl_status.setStyleSheet("color: #aaaaaa;")
+        self.panel.progress_bar.setVisible(True)
+
+        self._worker = _GcodeWorker(self._outline, params)
+        self._worker.finished.connect(self._on_gcode_ready)
+        self._worker.error.connect(self._on_gcode_error)
+        self._worker.start()
+
+    def _on_gcode_ready(self, gcode_string: str):
+        self._gcode_string = gcode_string
+        n_lines = gcode_string.count("\n") + 1
+        self.panel.btn_generate_gcode.setEnabled(True)
+        self.panel.progress_bar.setVisible(False)
+        self.panel.lbl_status.setText(f"✓ G-code generated ({n_lines} lines)")
+        self.panel.lbl_status.setStyleSheet("color: #60cc60;")
+
+    def _on_gcode_error(self, msg: str):
+        self.panel.btn_generate_gcode.setEnabled(True)
+        self.panel.progress_bar.setVisible(False)
+        self.panel.lbl_status.setText(f"✗ Error: {msg}")
+        self.panel.lbl_status.setStyleSheet("color: #ff6060;")
 
     def _save_gcode(self):
         if not self._gcode_string:
