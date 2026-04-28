@@ -6,6 +6,7 @@ from PyQt5.QtCore import Qt
 from core_carve.tab_design import DesignTab
 from core_carve.tab_base import BaseTab
 from core_carve.tab_geometry import GeometryTab
+from core_carve.tab_camber import CamberTab
 from core_carve.tab_blank import BlankTab
 from core_carve.tab_gcode import GcodeTab
 from core_carve.tab_profile import ProfileTab
@@ -30,6 +31,9 @@ class MainWindow(QMainWindow):
 
         self.geometry_tab = GeometryTab()
         self.tabs.addTab(self.geometry_tab, "Core Design")
+
+        self.camber_tab = CamberTab()
+        self.tabs.addTab(self.camber_tab, "Camber Design")
 
         # Blank, G-code, and Profile tabs (created when geometry is loaded)
         self.blank_tab = None
@@ -57,6 +61,7 @@ class MainWindow(QMainWindow):
             ski_data = {}
             ski_data.update(self.design_tab.panel.get_params().to_dict())
             ski_data["base"] = self.base_tab.panel.get_params().to_dict()
+            ski_data["camber"] = self.camber_tab.panel.get_params().to_dict()
             from dataclasses import asdict
             ski_data["core"] = asdict(self.geometry_tab.panel.get_params())
             with open(path, "w") as f:
@@ -91,6 +96,7 @@ class MainWindow(QMainWindow):
             self.gcode_tab.params = params
             self.profile_tab.geom = self.geometry_tab._geom
             self.profile_tab.params = params
+            self.camber_tab.set_ski_length(self.geometry_tab._geom.ski_length)
 
 
 def main():
