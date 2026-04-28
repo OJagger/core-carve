@@ -16,6 +16,8 @@ from matplotlib.figure import Figure
 import matplotlib.patches as patches
 import matplotlib.cm as cm
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.widgets import Button
 
 from core_carve.gcode_generator import SlotParams, generate_slot_gcode
 from core_carve.ski_geometry import SkiGeometry, half_widths_at_y
@@ -37,6 +39,10 @@ class GcodeCanvas(FigureCanvas):
         self._is_playing = False
         self._playback_timer = QTimer()
         self._playback_timer.timeout.connect(self._step_playback)
+        self._use_3d = False
+        self._3d_press = None
+        self._3d_xpress = None
+        self._3d_ypress = None
 
     def _setup_axes(self):
         self.fig.clear()
@@ -277,6 +283,128 @@ class GcodeCanvas(FigureCanvas):
         self.fig.tight_layout(pad=2.0)
         self.draw()
 
+    def set_3d_view(self, enable_3d=True):
+        """Toggle between 2D and 3D visualization modes."""
+        self._use_3d = enable_3d
+        if enable_3d and self._moves:
+            self.plot_toolpaths_3d(self._moves)
+        elif self._moves:
+            self.plot_toolpaths(self._moves)
+
+    def plot_toolpaths_3d(self, moves):
+        """Plot toolpaths in 3D with rotation and zoom controls."""
+        if not moves:
+            return
+
+        self.fig.clear()
+        ax = self.fig.add_subplot(111, projection="3d")
+        ax.set_facecolor("#2b2b2b")
+        ax.xaxis.pane.fill = False
+        ax.yaxis.pane.fill = False
+        ax.zaxis.pane.fill = False
+        ax.xaxis.pane.set_edgecolor("#555555")
+        ax.yaxis.pane.set_edgecolor("#555555")
+        ax.zaxis.pane.set_edgecolor("#555555")
+        ax.tick_params(colors="#cccccc", labelsize=8)
+        ax.xaxis.label.set_color("#cccccc")
+        ax.yaxis.label.set_color("#cccccc")
+        ax.zaxis.label.set_color("#cccccc")
+
+        # Group moves by Z depth for coloring
+        z_values = [m.z for m in moves]
+        z_min, z_max = min(z_values), max(z_values)
+        z_range = z_max - z_min if z_max != z_min else 1.0
+
+        # Plot moves as line segments
+        for i in range(1, len(moves)):
+            prev_move = moves[i - 1]
+            curr_move = moves[i]
+            z_norm = (curr_move.z - z_min) / z_range if z_range > 0 else 0.5
+
+            color = cm.coolwarm(z_norm)
+            linestyle = "--" if curr_move.is_rapid else "-"
+            linewidth = 0.5 if curr_move.is_rapid else 1.5
+
+            ax.plot(
+                [prev_move.x, curr_move.x],
+                [prev_move.y, curr_move.y],
+                [prev_move.z, curr_move.z],
+                color=color,
+                linestyle=linestyle,
+                linewidth=linewidth,
+                alpha=0.6
+            )
+
+        ax.set_xlabel("X (mm)")
+        ax.set_ylabel("Y (mm)")
+        ax.set_zlabel("Z (mm)")
+        ax.set_title("3D Toolpath (Right-click to rotate, Scroll to zoom)")
+
+        self.fig.tight_layout(pad=2.0)
+        self.draw()
+
+        # Enable mouse controls
+        self._enable_3d_mouse_controls(ax)
+
+    def _enable_3d_mouse_controls(self, ax):
+        """Add mouse controls to 3D plot for rotation and zoom."""
+        self._3d_press = None
+        self._3d_xpress = None
+        self._3d_ypress = None
+
+        def on_press(event):
+            if event.inaxes != ax:
+                return
+            self._3d_press = (event.button, event.xdata, event.ydata)
+            self._3d_xpress = ax.view_init()[1]
+            self._3d_ypress = ax.view_init()[0]
+
+        def on_release(event):
+            self._3d_press = None
+
+        def on_motion(event):
+            if self._3d_press is None or event.inaxes != ax:
+                return
+            button, xpress, ypress = self._3d_press
+            if button == 3:  # Right mouse button for rotation
+                dx = event.xdata - xpress if event.xdata else 0
+                dy = event.ydata - ypress if event.ydata else 0
+                ax.view_init(elev=self._3d_ypress + dy, azim=self._3d_xpress + dx)
+                self.draw()
+
+        def on_scroll(event):
+            if event.inaxes != ax:
+                return
+            cur_xlim = ax.get_xlim()
+            cur_ylim = ax.get_ylim()
+            cur_zlim = ax.get_zlim()
+
+            xdata = event.xdata
+            ydata = event.ydata
+
+            if event.button == "up":
+                scale_factor = 0.8
+            elif event.button == "down":
+                scale_factor = 1.2
+            else:
+                return
+
+            new_width = (cur_xlim[1] - cur_xlim[0]) * scale_factor
+            new_height = (cur_ylim[1] - cur_ylim[0]) * scale_factor
+            new_depth = (cur_zlim[1] - cur_zlim[0]) * scale_factor
+
+            relx = (cur_xlim[1] - xdata) / (cur_xlim[1] - cur_xlim[0])
+            rely = (cur_ylim[1] - ydata) / (cur_ylim[1] - cur_ylim[0])
+
+            ax.set_xlim([xdata - new_width * (1 - relx), xdata + new_width * relx])
+            ax.set_ylim([ydata - new_height * (1 - rely), ydata + new_height * rely])
+            self.draw()
+
+        self.mpl_connect("button_press_event", on_press)
+        self.mpl_connect("button_release_event", on_release)
+        self.mpl_connect("motion_notify_event", on_motion)
+        self.mpl_connect("scroll_event", on_scroll)
+
 
 # ── Parameter input panel ─────────────────────────────────────────────────────
 
@@ -403,6 +531,7 @@ class GcodeTab(QWidget):
         self.blank_tab = blank_tab
         self._gcode_string = None
         self._moves = None
+        self._use_3d = False
         self._build_ui()
         self._connect_signals()
         self._update_preview()
@@ -426,6 +555,7 @@ class GcodeTab(QWidget):
         self.lbl_speed = QLabel("1.0×")
         self.lbl_speed.setFixedWidth(50)
         self.btn_speed_up = QPushButton("Speed ▶")
+        self.btn_toggle_3d = QPushButton("3D View")
 
         playback_lay.addWidget(self.btn_play_pause)
         playback_lay.addWidget(self.btn_reset)
@@ -433,6 +563,7 @@ class GcodeTab(QWidget):
         playback_lay.addWidget(self.lbl_speed)
         playback_lay.addWidget(self.btn_speed_up)
         playback_lay.addStretch()
+        playback_lay.addWidget(self.btn_toggle_3d)
         canvas_layout.addLayout(playback_lay)
 
         canvas_widget = QWidget()
@@ -471,6 +602,7 @@ class GcodeTab(QWidget):
         self.btn_reset.clicked.connect(self._playback_reset)
         self.btn_speed_down.clicked.connect(self._playback_speed_down)
         self.btn_speed_up.clicked.connect(self._playback_speed_up)
+        self.btn_toggle_3d.clicked.connect(self._toggle_3d_view)
 
     def _update_preview(self):
         """Redraw slot preview (not expensive)."""
@@ -645,3 +777,17 @@ class GcodeTab(QWidget):
         new_speed = speeds[min(len(speeds) - 1, idx + 1)]
         self.canvas.set_playback_speed(new_speed)
         self.lbl_speed.setText(f"{new_speed}×")
+
+    def _toggle_3d_view(self):
+        """Toggle between 2D and 3D visualization."""
+        if not self._moves:
+            QMessageBox.warning(self, "No G-code", "Generate G-code first")
+            return
+
+        self._use_3d = not self._use_3d
+        self.btn_toggle_3d.setText("2D View" if self._use_3d else "3D View")
+
+        if self._use_3d:
+            self.canvas.plot_toolpaths_3d(self._moves)
+        else:
+            self.canvas.plot_toolpaths(self._moves)
