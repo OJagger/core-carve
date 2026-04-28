@@ -41,7 +41,7 @@ class BaseCanvas(FigureCanvas):
         self.draw()
 
     def plot_base_outline(self, outline, params):
-        """Plot ski outline with edge cutout regions."""
+        """Plot ski outline with edge cutout regions (horizontal ski view)."""
         self._setup_axes()
         ax = self.ax
 
@@ -52,36 +52,55 @@ class BaseCanvas(FigureCanvas):
             self.draw()
             return
 
-        # Draw main outline
-        ax.plot(outline[:, 0], outline[:, 1], color="#80c0ff", linewidth=2, label="Outline")
+        # Ski is displayed horizontally: X=across ski, Y=along ski
+        # outline is (x, y) where x=across, y=along
 
-        # Draw edge cutout regions
+        # Get edge cutout regions
         left_edge, right_edge = compute_edge_cutouts(outline, params)
 
-        if len(left_edge) > 0:
-            ax.fill(left_edge[:, 0], left_edge[:, 1], color="#ff6060", alpha=0.3, label="Left edge cutout")
-            ax.plot(left_edge[:, 0], left_edge[:, 1], color="#ff6060", linewidth=1)
+        # Draw overall ski outline in dashed lines (light color, behind)
+        ax.plot(outline[:, 0], outline[:, 1], color="#4488ff", linewidth=1.5, linestyle="--", alpha=0.4, label="Ski outline")
 
-        if len(right_edge) > 0:
-            ax.fill(right_edge[:, 0], right_edge[:, 1], color="#ff6060", alpha=0.3, label="Right edge cutout")
-            ax.plot(right_edge[:, 0], right_edge[:, 1], color="#ff6060", linewidth=1)
-
-        # Mark tip and tail offsets
+        # Draw base outline (solid blue lines) - this is the outline minus edge cutouts
+        # Start from outline, show only the regions where metal edges exist
         y_min, y_max = outline[:, 1].min(), outline[:, 1].max()
-        x_min, x_max = outline[:, 0].min(), outline[:, 0].max()
-
         tip_line_y = y_min + params.tip_offset
         tail_line_y = y_max - params.tail_offset
 
+        # Plot the base outline with cutouts
+        # Left side: outline where no cutout, dashed where cutout
+        ax.plot(outline[:, 0], outline[:, 1], color="#80c0ff", linewidth=2.5, label="Base outline")
+
+        # Overlay dashed lines in cutout regions (left edge)
+        if len(left_edge) > 0:
+            # Find indices where cutout applies
+            mask = (left_edge[:, 1] >= tip_line_y) & (left_edge[:, 1] <= tail_line_y)
+            if np.any(mask):
+                cutout_y = left_edge[mask, 1]
+                left_outline_at_y = np.interp(cutout_y, outline[:, 1], outline[:, 0])
+                ax.plot(left_outline_at_y, cutout_y, color="#4488ff", linewidth=1, linestyle="--", alpha=0.5)
+
+        # Overlay dashed lines in cutout regions (right edge)
+        if len(right_edge) > 0:
+            mask = (right_edge[:, 1] >= tip_line_y) & (right_edge[:, 1] <= tail_line_y)
+            if np.any(mask):
+                cutout_y = right_edge[mask, 1]
+                right_outline_at_y = np.interp(cutout_y, outline[:, 1], outline[:, 0])
+                ax.plot(right_outline_at_y, cutout_y, color="#4488ff", linewidth=1, linestyle="--", alpha=0.5)
+
+        # Mark tip and tail offset lines (dashed horizontal lines)
         ax.axhline(y=tip_line_y, color="#ffaa00", linestyle="--", linewidth=1, alpha=0.5, label="Tip offset")
         ax.axhline(y=tail_line_y, color="#ffaa00", linestyle="--", linewidth=1, alpha=0.5, label="Tail offset")
 
         ax.set_aspect("equal")
         ax.set_xlabel("Across ski (mm)")
         ax.set_ylabel("Along ski (mm)")
-        ax.set_title("Base Design with Edge Cutouts")
+        ax.set_title("Base Design with Edge Cutouts (Top View)")
         ax.grid(True, alpha=0.2, color="#555555")
-        ax.legend(fontsize=8, facecolor="#333333", labelcolor="#dddddd")
+
+        # Move legend below the plot
+        ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=3,
+                 facecolor="#333333", labelcolor="#dddddd")
 
         self.fig.tight_layout(pad=2.0)
         self.draw()

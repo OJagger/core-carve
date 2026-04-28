@@ -250,7 +250,41 @@ def _mx(pt):
 class DesignPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._load_defaults_from_file()
         self._build_ui()
+
+    def _load_defaults_from_file(self):
+        """Load default values from data/ski.json if available."""
+        import json
+        from pathlib import Path
+        ski_file = Path(__file__).parent.parent / "data" / "ski.json"
+        self._defaults = {}
+        if ski_file.exists():
+            try:
+                with open(ski_file) as f:
+                    data = json.load(f)
+                    self._defaults = {
+                        'length': data.get('length', 1800.0),
+                        'waist_w': data.get('waist_w', 96.0),
+                        'sidecut_radius': data.get('dimensions', {}).get('sidecut_radius', 16000.0) / 1000.0,
+                        'tip_w': data.get('tip_w', 125.0),
+                        'tail_w': data.get('tail_w', 115.0),
+                        'tip_l': data.get('tip_l', 134.0),
+                        'tip_trans': data.get('tip_trans_len', 201.0),
+                        'setback': data.get('setback', 61.0),
+                        'tail_trans': data.get('tail_trans_len', 210.0),
+                        'tail_l': data.get('tail_l', 105.0),
+                        'tip_apex_arm': data.get('control_arms', {}).get('tip_apex_arm', 30.0),
+                        'tip_junc_arm': data.get('control_arms', {}).get('tip_junc_arm', 130.0),
+                        'tip_trans_junc_arm': data.get('control_arms', {}).get('tip_trans_junc_arm', 30.0),
+                        'tip_trans_arc_arm': data.get('control_arms', {}).get('tip_trans_arc_arm', 30.0),
+                        'tail_trans_arc_arm': data.get('control_arms', {}).get('tail_trans_arc_arm', 30.0),
+                        'tail_trans_junc_arm': data.get('control_arms', {}).get('tail_trans_junc_arm', 30.0),
+                        'tail_junc_arm': data.get('control_arms', {}).get('tail_junc_arm', 100.0),
+                        'tail_apex_arm': data.get('control_arms', {}).get('tail_apex_arm', 40.0),
+                    }
+            except Exception:
+                pass  # Use hardcoded defaults if file load fails
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -259,9 +293,9 @@ class DesignPanel(QWidget):
         # Ski dimensions
         dim = QGroupBox("Ski Dimensions")
         dl = QFormLayout(dim)
-        self.f_length      = _FloatField(1800.0)
-        self.f_waist_w     = _FloatField(96.0)
-        self.f_sidecut_r   = _FloatField(16.0)   # m — stored in params as mm
+        self.f_length      = _FloatField(self._defaults.get('length', 1800.0))
+        self.f_waist_w     = _FloatField(self._defaults.get('waist_w', 96.0))
+        self.f_sidecut_r   = _FloatField(self._defaults.get('sidecut_radius', 16.0))   # m
         dl.addRow("Length (mm):", self.f_length)
         dl.addRow("Waist width (mm):", self.f_waist_w)
         dl.addRow("Sidecut radius (m):", self.f_sidecut_r)
@@ -270,8 +304,8 @@ class DesignPanel(QWidget):
         # Tip & Tail widths
         tt = QGroupBox("Tip & Tail Widths")
         tl = QFormLayout(tt)
-        self.f_tip_w  = _FloatField(130.0)
-        self.f_tail_w = _FloatField(115.0)
+        self.f_tip_w  = _FloatField(self._defaults.get('tip_w', 125.0))
+        self.f_tail_w = _FloatField(self._defaults.get('tail_w', 115.0))
         tl.addRow("Tip width (mm):", self.f_tip_w)
         tl.addRow("Tail width (mm):", self.f_tail_w)
         root.addWidget(tt)
@@ -279,11 +313,11 @@ class DesignPanel(QWidget):
         # Positions (drag lines on main view, or type here)
         pos = QGroupBox("Key Positions (drag lines or type)")
         pl = QFormLayout(pos)
-        self.f_tip_l        = _FloatField(300.0)
-        self.f_tip_trans    = _FloatField(50.0, width=55)
-        self.f_setback      = _FloatField(0.0,  width=55)
-        self.f_tail_trans   = _FloatField(50.0, width=55)
-        self.f_tail_l       = _FloatField(200.0)
+        self.f_tip_l        = _FloatField(self._defaults.get('tip_l', 134.0))
+        self.f_tip_trans    = _FloatField(self._defaults.get('tip_trans', 201.0), width=55)
+        self.f_setback      = _FloatField(self._defaults.get('setback', 61.0),  width=55)
+        self.f_tail_trans   = _FloatField(self._defaults.get('tail_trans', 210.0), width=55)
+        self.f_tail_l       = _FloatField(self._defaults.get('tail_l', 105.0))
         pl.addRow("Tip junction (mm):", self.f_tip_l)
         pl.addRow("Tip transition length:", self.f_tip_trans)
         pl.addRow("Waist setback:", self.f_setback)
@@ -294,10 +328,10 @@ class DesignPanel(QWidget):
         # Tip control arms
         tip_arms = QGroupBox("Tip Control Arms")
         tal = QFormLayout(tip_arms)
-        self.f_tip_apex_arm       = _FloatField(100.0)
-        self.f_tip_junc_arm       = _FloatField(32.5)
-        self.f_tip_trans_junc_arm = _FloatField(32.5)
-        self.f_tip_trans_arc_arm  = _FloatField(30.0)
+        self.f_tip_apex_arm       = _FloatField(self._defaults.get('tip_apex_arm', 30.0))
+        self.f_tip_junc_arm       = _FloatField(self._defaults.get('tip_junc_arm', 130.0))
+        self.f_tip_trans_junc_arm = _FloatField(self._defaults.get('tip_trans_junc_arm', 30.0))
+        self.f_tip_trans_arc_arm  = _FloatField(self._defaults.get('tip_trans_arc_arm', 30.0))
         tal.addRow("Apex arm (mm):",          self.f_tip_apex_arm)
         tal.addRow("Junction arm (mm):",      self.f_tip_junc_arm)
         tal.addRow("Trans junction arm (mm):", self.f_tip_trans_junc_arm)
@@ -307,10 +341,10 @@ class DesignPanel(QWidget):
         # Tail control arms
         tail_arms = QGroupBox("Tail Control Arms")
         ttal = QFormLayout(tail_arms)
-        self.f_tail_trans_arc_arm  = _FloatField(30.0)
-        self.f_tail_trans_junc_arm = _FloatField(28.75)
-        self.f_tail_junc_arm       = _FloatField(28.75)
-        self.f_tail_apex_arm       = _FloatField(66.7)
+        self.f_tail_trans_arc_arm  = _FloatField(self._defaults.get('tail_trans_arc_arm', 30.0))
+        self.f_tail_trans_junc_arm = _FloatField(self._defaults.get('tail_trans_junc_arm', 30.0))
+        self.f_tail_junc_arm       = _FloatField(self._defaults.get('tail_junc_arm', 100.0))
+        self.f_tail_apex_arm       = _FloatField(self._defaults.get('tail_apex_arm', 40.0))
         ttal.addRow("Trans arc arm (mm):",      self.f_tail_trans_arc_arm)
         ttal.addRow("Trans junction arm (mm):", self.f_tail_trans_junc_arm)
         ttal.addRow("Junction arm (mm):",      self.f_tail_junc_arm)
@@ -395,6 +429,7 @@ class DesignTab(QWidget):
         super().__init__(parent)
         self._result: Optional[SkiOutlineResult] = None
         self._on_outline_ready: Optional[Callable] = None
+        self._on_ski_definition_loaded: Optional[Callable] = None
 
         # Drag state
         self._drag_type:    Optional[str] = None  # _DRAG_CTRL or _DRAG_LINE
@@ -634,8 +669,20 @@ class DesignTab(QWidget):
         if not path:
             return
         try:
-            p = SkiPlanformParams.from_json(path)
-            self._update_from_params(p)
+            import json
+            with open(path) as f:
+                data = json.load(f)
+
+            # Check if this is a full ski definition (has core, base, or camber keys)
+            is_full_definition = any(k in data for k in ["core", "base", "camber"])
+
+            if is_full_definition and self._on_ski_definition_loaded is not None:
+                # Let main window handle full definition
+                self._on_ski_definition_loaded(path)
+            else:
+                # Just load outline params
+                p = SkiPlanformParams.from_json(path)
+                self._update_from_params(p)
         except Exception as e:
             from PyQt5.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Load Failed", str(e))
@@ -677,6 +724,9 @@ class DesignTab(QWidget):
 
     def set_outline_callback(self, fn: Callable) -> None:
         self._on_outline_ready = fn
+
+    def set_ski_definition_loaded_callback(self, fn: Callable) -> None:
+        self._on_ski_definition_loaded = fn
 
     def _use_as_planform(self):
         if self._result is not None and self._on_outline_ready is not None:

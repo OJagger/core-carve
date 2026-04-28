@@ -62,7 +62,7 @@ class CamberCanvas(FigureCanvas):
             return
 
     def plot_camber(self, params: CamberParams, ski_length: float = None):
-        """Plot camber line with control points."""
+        """Plot camber line with control points and constraint markers."""
         if ski_length is None:
             ski_length = self._ski_length
 
@@ -83,33 +83,42 @@ class CamberCanvas(FigureCanvas):
         tail_start_y = ski_length - params.tail_rocker_length
         center_y = ski_length / 2.0
 
-        # Mark rocker and camber boundaries
-        ax.axvline(x=tip_end_y, color="#ffaa00", linestyle="--", linewidth=1, alpha=0.5)
+        # Mark rocker and camber boundaries with dashed offset lines
+        ax.axvline(x=tip_end_y, color="#ffaa00", linestyle="--", linewidth=1, alpha=0.5, label="Rocker/camber boundary")
         ax.axvline(x=tail_start_y, color="#ffaa00", linestyle="--", linewidth=1, alpha=0.5)
 
-        # Mark key points
-        z_at_tip_end = np.interp(tip_end_y, y_points, z_points)
-        z_at_tail_start = np.interp(tail_start_y, y_points, z_points)
-        z_at_center = np.interp(center_y, y_points, z_points)
+        # Plot control points and constraint markers
+        # Tip rocker endpoints
+        ax.plot(0, params.tip_rocker_height, "ro", markersize=8, label="Tip rocker control")
+        ax.plot(tip_end_y, 0, "bs", markersize=8, label="Rocker/camber junction (z=0, constrained)")
 
-        ax.plot(0, 0, "ro", markersize=8, label="Tip contact")
-        ax.plot(ski_length, 0, "ro", markersize=8, label="Tail contact")
-        ax.plot(tip_end_y, z_at_tip_end, "bs", markersize=8, label="Tip rocker end")
-        ax.plot(tail_start_y, z_at_tail_start, "bs", markersize=8, label="Tail rocker start")
-        ax.plot(center_y, z_at_center, "g^", markersize=8, label="Center (camber peak)")
+        # Camber section
+        ax.plot(center_y, params.camber_amount, "g^", markersize=8, label="Camber peak")
+
+        # Tail rocker endpoints
+        ax.plot(tail_start_y, 0, "bs", markersize=8)
+        ax.plot(ski_length, params.tail_rocker_height, "ro", markersize=8, label="Tail rocker control")
+
+        # Draw control arms (spline control structure) - horizontal constraints at boundaries
+        # Tip rocker: shows the control arm is horizontal at the boundary
+        ax.arrow(tip_end_y - 20, 0, 40, 0, head_width=1, head_length=10, fc="#ff8800", ec="#ff8800", alpha=0.4, linestyle='--')
+        ax.text(tip_end_y, -3, "Horizontal\nconstraint", ha="center", fontsize=7, color="#ff8800")
+
+        # Tail rocker: horizontal constraint at boundary
+        ax.arrow(tail_start_y - 20, 0, 40, 0, head_width=1, head_length=10, fc="#ff8800", ec="#ff8800", alpha=0.4, linestyle='--')
 
         # Annotations
-        ax.text(0, -5, "Tip", ha="center", fontsize=8, color="#cccccc")
-        ax.text(ski_length, -5, "Tail", ha="center", fontsize=8, color="#cccccc")
-        ax.text(center_y, z_at_center + 3, f"Camber: {params.camber_amount:.1f}mm", ha="center", fontsize=8, color="#cccccc")
+        ax.text(0, params.tip_rocker_height + 2, f"Tip: {params.tip_rocker_height:.0f}mm", ha="center", fontsize=8, color="#cccccc")
+        ax.text(ski_length, params.tail_rocker_height + 2, f"Tail: {params.tail_rocker_height:.0f}mm", ha="center", fontsize=8, color="#cccccc")
+        ax.text(center_y, params.camber_amount + 2, f"Camber: {params.camber_amount:.1f}mm", ha="center", fontsize=8, color="#cccccc")
 
         ax.set_xlim(-50, ski_length + 50)
-        ax.set_ylim(-20, max(params.tip_rocker_height, params.camber_amount, params.tail_rocker_height) + 15)
+        ax.set_ylim(-10, max(params.tip_rocker_height, params.camber_amount, params.tail_rocker_height) + 10)
         ax.set_xlabel("Along ski (mm)")
         ax.set_ylabel("Vertical height (mm)")
         ax.set_title("Camber Profile (Side View)")
         ax.grid(True, alpha=0.2, color="#555555")
-        ax.legend(fontsize=7, loc="upper right", facecolor="#333333", labelcolor="#dddddd")
+        ax.legend(fontsize=7, loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=2, facecolor="#333333", labelcolor="#dddddd")
 
         self.fig.tight_layout(pad=2.0)
         self.draw()

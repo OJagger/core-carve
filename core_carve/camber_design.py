@@ -41,41 +41,45 @@ def compute_camber_line(ski_length: float, params: CamberParams) -> tuple[np.nda
     """
     Compute camber line with 3 spline sections: tip rocker, camber, tail rocker.
 
+    The camber line is the bottom surface of the ski. It touches snow at the
+    tip and tail rocker ends (zero gradient), and arches up in the middle (camber).
+
     Args:
         ski_length: Total ski length (mm)
         params: CamberParams
 
     Returns:
-        (y_points, z_points) where y is along ski, z is vertical
+        (y_points, z_points) where y is along ski, z is vertical (up from snow contact)
     """
-    # Key points along ski length
-    tip_end_y = params.tip_rocker_length
-    tail_start_y = ski_length - params.tail_rocker_length
+    # Key points along ski length (where rocker and camber sections meet)
+    tip_rocker_end_y = params.tip_rocker_length
+    tail_rocker_start_y = ski_length - params.tail_rocker_length
     center_y = ski_length / 2.0
 
-    # Vertical positions (Z axis)
-    # Contact points at tip and tail ends (z=0)
-    tip_contact_z = 0.0
-    tail_contact_z = 0.0
+    # Vertical positions: z=0 at rocker/camber boundaries (where ski touches snow)
+    # Rocker endpoints have z=0 (snow contact with zero gradient)
+    rocker_contact_z = 0.0
 
-    # Intermediate points
-    tip_end_z = params.tip_rocker_height
-    tail_start_z = params.tail_rocker_height
+    # But the rockers themselves arc up from the ends (tip and tail extremes)
+    tip_extent_z = params.tip_rocker_height
+    tail_extent_z = params.tail_rocker_height
     center_z = params.camber_amount
 
     # Create control points for 3 splines
-    # Tip rocker: from (0, tip_contact) to (tip_end_y, tip_end_z)
-    tip_y = np.array([0.0, params.tip_rocker_length / 3.0, params.tip_rocker_length * 2 / 3.0, tip_end_y])
-    tip_z = np.array([tip_contact_z, params.tip_rocker_height / 2.0, params.tip_rocker_height * 0.8, tip_end_z])
+    # Tip rocker: from tip (raised) to rocker start (touches snow, z=0)
+    # Curve down from tip_extent toward contact at rocker_end
+    tip_y = np.array([0.0, params.tip_rocker_length / 3.0, params.tip_rocker_length * 2 / 3.0, tip_rocker_end_y])
+    tip_z = np.array([tip_extent_z, params.tip_rocker_height * 0.7, params.tip_rocker_height * 0.3, rocker_contact_z])
 
-    # Camber section: from (tip_end_y, tip_end_z) to (tail_start_y, tail_start_z)
-    camber_y = np.array([tip_end_y, center_y, tail_start_y])
-    camber_z = np.array([tip_end_z, center_z, tail_start_z])
+    # Camber section: from rocker start (z=0) through center peak, to rocker end (z=0)
+    camber_y = np.array([tip_rocker_end_y, center_y, tail_rocker_start_y])
+    camber_z = np.array([rocker_contact_z, center_z, rocker_contact_z])
 
-    # Tail rocker: from (tail_start_y, tail_start_z) to (ski_length, tail_contact)
-    tail_y = np.array([tail_start_y, tail_start_y + (ski_length - tail_start_y) / 3.0,
-                       tail_start_y + 2 * (ski_length - tail_start_y) / 3.0, ski_length])
-    tail_z = np.array([tail_start_z, params.tail_rocker_height * 0.8, params.tail_rocker_height / 2.0, tail_contact_z])
+    # Tail rocker: from rocker start (touches snow, z=0) to tail (raised)
+    # Curve up from contact to tail_extent
+    tail_y = np.array([tail_rocker_start_y, tail_rocker_start_y + (ski_length - tail_rocker_start_y) / 3.0,
+                       tail_rocker_start_y + 2 * (ski_length - tail_rocker_start_y) / 3.0, ski_length])
+    tail_z = np.array([rocker_contact_z, tail_extent_z * 0.3, tail_extent_z * 0.7, tail_extent_z])
 
     # Create splines for each section
     try:
