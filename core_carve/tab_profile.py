@@ -30,12 +30,14 @@ class ProfileCanvas(FigureCanvas):
         self.ax = None
         self._setup_axes()
         self._moves = None
+        self._blank = None
         self._playback_idx = 0
         self._playback_speed_multiplier = 1
         self._is_playing = False
         self._playback_timer = QTimer()
         self._playback_timer.timeout.connect(self._step_playback)
         self._use_3d = False
+        self._tool_diameter = 12.0
 
     def _setup_axes(self):
         self.fig.clear()
@@ -47,13 +49,21 @@ class ProfileCanvas(FigureCanvas):
         self.fig.tight_layout(pad=2.0)
         self.draw()
 
-    def plot_toolpaths(self, moves):
-        """Plot profiling toolpaths."""
+    def plot_toolpaths(self, moves, blank=None):
+        """Plot profiling toolpaths in 2D (top view)."""
         if not moves:
             return
 
         self._setup_axes()
         ax = self.ax
+
+        # Draw blank if provided
+        if blank:
+            rect_blank = patches.Rectangle(
+                (0, -blank.width / 2), blank.length, blank.width,
+                linewidth=2, edgecolor="#80c0ff", facecolor="none", label="Blank"
+            )
+            ax.add_patch(rect_blank)
 
         z_values = [m.z for m in moves]
         z_min, z_max = min(z_values), max(z_values)
@@ -74,11 +84,16 @@ class ProfileCanvas(FigureCanvas):
                 color=color, linestyle=linestyle, linewidth=linewidth, alpha=0.6
             )
 
+        if blank:
+            ax.set_xlim(-50, blank.length + 50)
+            ax.set_ylim(-blank.width / 2 - 50, blank.width / 2 + 50)
         ax.set_aspect("equal")
-        ax.set_xlabel("X (mm)")
-        ax.set_ylabel("Y (mm)")
-        ax.set_title("Profiling Toolpath")
+        ax.set_xlabel("Along blank (mm)")
+        ax.set_ylabel("Across blank (mm)")
+        ax.set_title("Profiling Toolpath (Top View)")
         ax.grid(True, alpha=0.2, color="#555555")
+        if blank:
+            ax.legend(fontsize=8, facecolor="#333333", labelcolor="#dddddd")
 
         self.fig.tight_layout(pad=2.0)
         self.draw()
@@ -158,6 +173,15 @@ class ProfileCanvas(FigureCanvas):
         self._setup_axes()
         ax = self.ax
 
+        # Draw blank outline
+        if self._blank:
+            rect_blank = patches.Rectangle(
+                (0, -self._blank.width / 2), self._blank.length, self._blank.width,
+                linewidth=2, edgecolor="#80c0ff", facecolor="none", label="Blank"
+            )
+            ax.add_patch(rect_blank)
+
+        # Draw path taken so far
         if self._moves and len(self._moves) > 0:
             cutting_x, cutting_y = [], []
             rapid_x, rapid_y = [], []
@@ -173,22 +197,25 @@ class ProfileCanvas(FigureCanvas):
                     cutting_y.extend([prev.y, curr.y, None])
 
             if cutting_x:
-                ax.plot(cutting_x, cutting_y, color="#60cc60", linewidth=1.5, alpha=0.7)
+                ax.plot(cutting_x, cutting_y, color="#60cc60", linewidth=1.5, linestyle="-", alpha=0.7)
             if rapid_x:
                 ax.plot(rapid_x, rapid_y, color="#ff8844", linewidth=1.5, linestyle="--", alpha=0.7)
 
             if self._playback_idx < len(self._moves):
                 curr_move = self._moves[self._playback_idx]
-                circle = patches.Circle((curr_move.x, curr_move.y), 6, edgecolor="#ff0000", facecolor="none", linewidth=2)
+                circle = patches.Circle((curr_move.x, curr_move.y), self._tool_diameter / 2, edgecolor="#ff0000", facecolor="none", linewidth=2)
                 ax.add_patch(circle)
 
         ax.set_aspect("equal")
-        ax.set_xlabel("X (mm)")
-        ax.set_ylabel("Y (mm)")
+        if self._blank:
+            ax.set_xlim(-50, self._blank.length + 50)
+            ax.set_ylim(-self._blank.width / 2 - 50, self._blank.width / 2 + 50)
+        ax.set_xlabel("Along blank (mm)")
+        ax.set_ylabel("Across blank (mm)")
         if self._moves:
             progress = int(100 * min(self._playback_idx, len(self._moves)) / len(self._moves))
             status = "Playing" if self._is_playing else "Paused"
-            ax.set_title(f"Profiling Playback — {status} ({progress}%)")
+            ax.set_title(f"Profiling Playback — {status} ({progress}%) Move {min(self._playback_idx + 1, len(self._moves))}/{len(self._moves)}")
         ax.grid(True, alpha=0.2, color="#555555")
 
         self.fig.tight_layout(pad=2.0)
@@ -369,8 +396,10 @@ class ProfileTab(QWidget):
             )
 
             self.canvas._moves = self._moves
+            self.canvas._blank = blank
+            self.canvas._tool_diameter = profile_params.tool_diameter
             self.canvas._playback_idx = 0
-            self.canvas._step_playback_frame()
+            self.canvas.plot_toolpaths(self._moves, blank)
             self.lbl_speed.setText("1×")
 
             self.panel.lbl_status.setText(f"✓ G-code generated ({len(self._moves)} moves)")

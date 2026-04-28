@@ -258,33 +258,27 @@ class DesignPanel(QWidget):
         import json
         from pathlib import Path
         ski_file = Path(__file__).parent.parent / "data" / "ski.json"
-        self._defaults = {}
-        if ski_file.exists():
-            try:
-                with open(ski_file) as f:
-                    data = json.load(f)
-                    self._defaults = {
-                        'length': data.get('length', 1800.0),
-                        'waist_w': data.get('waist_w', 96.0),
-                        'sidecut_radius': data.get('dimensions', {}).get('sidecut_radius', 16000.0) / 1000.0,
-                        'tip_w': data.get('tip_w', 125.0),
-                        'tail_w': data.get('tail_w', 115.0),
-                        'tip_l': data.get('tip_l', 134.0),
-                        'tip_trans': data.get('tip_trans_len', 201.0),
-                        'setback': data.get('setback', 61.0),
-                        'tail_trans': data.get('tail_trans_len', 210.0),
-                        'tail_l': data.get('tail_l', 105.0),
-                        'tip_apex_arm': data.get('control_arms', {}).get('tip_apex_arm', 30.0),
-                        'tip_junc_arm': data.get('control_arms', {}).get('tip_junc_arm', 130.0),
-                        'tip_trans_junc_arm': data.get('control_arms', {}).get('tip_trans_junc_arm', 30.0),
-                        'tip_trans_arc_arm': data.get('control_arms', {}).get('tip_trans_arc_arm', 30.0),
-                        'tail_trans_arc_arm': data.get('control_arms', {}).get('tail_trans_arc_arm', 30.0),
-                        'tail_trans_junc_arm': data.get('control_arms', {}).get('tail_trans_junc_arm', 30.0),
-                        'tail_junc_arm': data.get('control_arms', {}).get('tail_junc_arm', 100.0),
-                        'tail_apex_arm': data.get('control_arms', {}).get('tail_apex_arm', 40.0),
-                    }
-            except Exception:
-                pass  # Use hardcoded defaults if file load fails
+        # Use ski.json values as defaults (from ski.json hardcoded)
+        self._defaults = {
+            'length': 1800.0,
+            'waist_w': 98.0,
+            'sidecut_radius': 16.0,  # Already in meters
+            'tip_w': 125.0,
+            'tail_w': 115.0,
+            'tip_l': 134.0,
+            'tip_trans': 201.0,
+            'setback': 61.0,
+            'tail_trans': 210.0,
+            'tail_l': 105.0,
+            'tip_apex_arm': 30.0,
+            'tip_junc_arm': 130.0,
+            'tip_trans_junc_arm': 30.0,
+            'tip_trans_arc_arm': 30.0,
+            'tail_trans_arc_arm': 30.0,
+            'tail_trans_junc_arm': 30.0,
+            'tail_junc_arm': 100.0,
+            'tail_apex_arm': 40.0,
+        }
 
     def _build_ui(self):
         root = QVBoxLayout(self)

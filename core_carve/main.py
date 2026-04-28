@@ -101,6 +101,10 @@ class MainWindow(QMainWindow):
                     tail_apex_arm=ski_data.get("control_arms", {}).get("tail_apex_arm", outline_params.tail_apex_arm),
                 )
                 self.design_tab._update_from_params(updated_params)
+                # Get the generated outline and set it on geometry tab
+                if self.design_tab._result is not None:
+                    self.geometry_tab._outline = self.design_tab._result.outline.copy()
+                    self.base_tab.set_outline(self.design_tab._result.outline.copy())
 
             # Load base design params
             if "base" in ski_data:
