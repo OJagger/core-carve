@@ -11,21 +11,16 @@ import numpy as np
 @dataclass
 class ProfileParams:
     """CNC machine and tool parameters for thickness profiling."""
-    # Tool parameters
-    tool_diameter: float = 12.0         # mm
-    spindle_speed: int = 12000          # RPM
-
-    # Feeds
-    cutting_feed: float = 800.0         # mm/min
-    plunge_feed: float = 200.0          # mm/min
-    rapid_feed: float = 1500.0          # mm/min
-
-    # Cut strategy
-    roughing_depth_per_pass: float = 2.0   # mm per pass
-    finishing_depth_of_cut: float = 0.5    # mm final pass
-    stepover: float = 3.0                  # mm lateral step
-    clearance_height: float = 10.0         # mm above blank
-    direction: str = "along"               # "along" (ski length) or "across" (width)
+    tool_diameter: float = 12.0
+    spindle_speed: int = 12000
+    cutting_feed: float = 800.0
+    plunge_feed: float = 200.0
+    rapid_feed: float = 1500.0
+    roughing_depth_per_pass: float = 2.0
+    finishing_depth_of_cut: float = 0.5
+    stepover: float = 6.0
+    clearance_height: float = 10.0
+    direction: str = "along"  # "along" (ski length) or "across" (width)
 
     def to_json(self, path: str | Path) -> None:
         with open(path, "w") as f:
@@ -40,7 +35,7 @@ class ProfileParams:
 
 @dataclass
 class Move:
-    """A single CNC move for visualization and G-code output."""
+    """A single CNC move."""
     x: float
     y: float
     z: float
@@ -55,110 +50,116 @@ def generate_profile_gcode(
     profile_params: ProfileParams,
 ) -> tuple[str, list[Move]]:
     """
-    Generate G-code for core thickness profiling.
+    Generate G-code for core thickness profiling in blank-space coordinates.
 
-    Args:
-        geom: SkiGeometry
-        params: SkiParams
-        blank: CoreBlank
-        profile_params: ProfileParams
+    Blank space:
+      X = along blank = ski_Y + x_offset  (ski runs along blank X)
+      Y = across blank = ski_X + core_y_offset
 
     Returns:
-        (gcode_string, moves_list)
+        (gcode_string, moves_list)  — moves are in blank space for visualization.
     """
-    from core_carve.ski_geometry import half_widths_at_y
+    from core_carve.core_blank import MachineOrientation, OriginCorner
 
     core_positions = blank.get_core_positions(geom, params)
     if not core_positions:
         return "", []
 
-    # Determine cutting path direction
-    if profile_params.direction == "along":
-        # Cuts run along ski length (Y axis)
-        core_start = geom.core_tip_x - 25.0
-        core_end = geom.core_tail_x + 25.0
-        n_cuts = max(2, int(np.ceil(params.sidewall_width * 2 / profile_params.stepover)))
+    core_start = geom.core_tip_x - 25.0
+    core_end = geom.core_tail_x + 25.0
+    core_extent = core_end - core_start
 
-        # Position cuts across core width
-        x_positions = np.linspace(
-            -params.sidewall_width,
-            params.sidewall_width,
-            n_cuts
-        )
-    else:
-        # Cuts run across ski width (X axis)
-        core_start = geom.core_tip_x - 25.0
-        core_end = geom.core_tail_x + 25.0
+    # Centering offset: same calculation as tab_gcode.py
+    x_offset = (blank.length - core_extent) / 2.0 - core_start
 
-        # Create regular cuts along ski length
-        y_samples = np.linspace(core_start, core_end, int(np.ceil((core_end - core_start) / profile_params.stepover)))
-        x_positions = y_samples
+    def ski_to_blank(y_ski: float, x_ski: float) -> tuple[float, float]:
+        """Convert ski-geometry coords to blank-space coords."""
+        return y_ski + x_offset, x_ski
 
-    # Thickness profile simulation (simplified parabolic profile)
-    def get_profile_depth(x, y, core_x, core_y):
-        """Simplified profile: deepest at center, feather to edges."""
-        dist_from_center = np.sqrt((x - core_x) ** 2 + (y - core_y) ** 2)
-        max_dist = params.sidewall_width
-        if dist_from_center >= max_dist:
-            return 0.0
-        # Parabolic taper
-        return (params.sidewall_width * 0.5) * (1.0 - (dist_from_center / max_dist) ** 2)
+    def transform_to_machine_space(bx: float, by: float) -> tuple[float, float]:
+        """Apply machine orientation and origin corner transforms."""
+        if blank.machine_orientation == MachineOrientation.Y_AXIS:
+            bx, by = by, bx
+        if blank.origin_corner == OriginCorner.TOP_LEFT:
+            by = blank.width - by
+        elif blank.origin_corner == OriginCorner.TOP_RIGHT:
+            bx = blank.length - bx
+            by = blank.width - by
+        elif blank.origin_corner == OriginCorner.BOTTOM_RIGHT:
+            bx = blank.length - bx
+        return bx, by
 
-    moves = []
-    gcode_lines = ["G21 G17 G90 G94", f"G00 Z{profile_params.clearance_height:.3f}", f"S{profile_params.spindle_speed} M03"]
+    moves: list[Move] = []
+    gcode = [
+        "G21 G17 G90 G94",
+        f"G00 Z{profile_params.clearance_height:.3f}",
+        f"S{profile_params.spindle_speed} M03",
+    ]
 
-    # Generate toolpaths for each core
-    for core_idx, (core_x, core_y) in enumerate(core_positions):
+    def rapid(bx, by, bz):
+        moves.append(Move(bx, by, bz, is_rapid=True))
+        mx, my = transform_to_machine_space(bx, by)
+        gcode.append(f"G00 X{mx:.3f} Y{my:.3f} Z{bz:.3f}")
+
+    def feed_move(bx, by, bz, f):
+        moves.append(Move(bx, by, bz, is_rapid=False, feed=f))
+        mx, my = transform_to_machine_space(bx, by)
+        gcode.append(f"G01 X{mx:.3f} Y{my:.3f} Z{bz:.3f} F{f:.1f}")
+
+    # Thickness profile: total depth = blank thickness (simplified flat profile for now)
+    total_depth = blank.thickness
+    depths = []
+    d = profile_params.roughing_depth_per_pass
+    while d < total_depth - profile_params.finishing_depth_of_cut:
+        depths.append(-d)
+        d += profile_params.roughing_depth_per_pass
+    depths.append(-total_depth + profile_params.finishing_depth_of_cut)
+    depths.append(-total_depth)
+
+    for core_x_along, core_y_across in core_positions:
+        # Width of core to cover (use half-widths at waist + sidewall allowance)
+        half_w = params.sidewall_width + getattr(params, "sidewall_overlap", 0.0)
+
         if profile_params.direction == "along":
-            # Cuts along ski length
-            y_samples = np.linspace(core_start, core_end, 200)
+            # Passes run along the ski (blank X axis), spaced across width (blank Y axis)
+            y_ski_samples = np.linspace(core_start, core_end, 300)
+            x_ski_passes = np.arange(-half_w, half_w + profile_params.stepover, profile_params.stepover)
 
-            for x_offset in x_positions:
-                x = core_x + x_offset
+            for depth in depths:
+                for i, x_ski in enumerate(x_ski_passes):
+                    bx_start, by = ski_to_blank(core_start, x_ski + core_y_across)
+                    bx_end, _ = ski_to_blank(core_end, x_ski + core_y_across)
 
-                # Roughing pass
-                z_roughing = -profile_params.roughing_depth_per_pass
-                moves.append(Move(x, y_samples[0] + core_y, profile_params.clearance_height, is_rapid=True))
-                gcode_lines.append(f"G00 X{x:.3f} Y{y_samples[0] + core_y:.3f}")
-                gcode_lines.append(f"G00 Z{profile_params.clearance_height:.3f}")
+                    rapid(bx_start, by, profile_params.clearance_height)
+                    feed_move(bx_start, by, depth, profile_params.plunge_feed)
 
-                moves.append(Move(x, y_samples[0] + core_y, z_roughing, is_rapid=False, feed=profile_params.plunge_feed))
-                gcode_lines.append(f"G01 Z{z_roughing:.3f} F{profile_params.plunge_feed:.1f}")
+                    # Alternate direction each pass (boustrophedon)
+                    ys = y_ski_samples if i % 2 == 0 else y_ski_samples[::-1]
+                    for y_ski in ys:
+                        bx, _ = ski_to_blank(y_ski, x_ski + core_y_across)
+                        feed_move(bx, by, depth, profile_params.cutting_feed)
 
-                for y in y_samples:
-                    moves.append(Move(x, y + core_y, z_roughing, is_rapid=False, feed=profile_params.cutting_feed))
-                    gcode_lines.append(f"G01 X{x:.3f} Y{y + core_y:.3f} F{profile_params.cutting_feed:.1f}")
-
-                moves.append(Move(x, y_samples[-1] + core_y, profile_params.clearance_height, is_rapid=True))
-                gcode_lines.append(f"G00 Z{profile_params.clearance_height:.3f}")
+                    rapid(bx_start if i % 2 == 1 else bx_end, by, profile_params.clearance_height)
 
         else:
-            # Cuts across ski width
-            for y_pos in x_positions:
-                y = core_start + y_pos if profile_params.direction == "across" else y_pos
+            # Passes run across the ski (blank Y axis), spaced along length (blank X axis)
+            x_ski_samples = np.arange(-half_w, half_w + profile_params.stepover / 2, profile_params.stepover / 4)
+            y_ski_passes = np.arange(core_start, core_end + profile_params.stepover, profile_params.stepover)
 
-                # Roughing pass across width
-                x_range = np.linspace(-params.sidewall_width, params.sidewall_width, 100)
-                z_roughing = -profile_params.roughing_depth_per_pass
+            for depth in depths:
+                for i, y_ski in enumerate(y_ski_passes):
+                    bx, by_start = ski_to_blank(y_ski, -half_w + core_y_across)
+                    _, by_end = ski_to_blank(y_ski, half_w + core_y_across)
 
-                moves.append(Move(core_x + x_range[0], y + core_y, profile_params.clearance_height, is_rapid=True))
-                gcode_lines.append(f"G00 X{core_x + x_range[0]:.3f} Y{y + core_y:.3f}")
-                gcode_lines.append(f"G00 Z{profile_params.clearance_height:.3f}")
+                    rapid(bx, by_start, profile_params.clearance_height)
+                    feed_move(bx, by_start, depth, profile_params.plunge_feed)
 
-                moves.append(Move(core_x + x_range[0], y + core_y, z_roughing, is_rapid=False, feed=profile_params.plunge_feed))
-                gcode_lines.append(f"G01 Z{z_roughing:.3f} F{profile_params.plunge_feed:.1f}")
+                    xs = x_ski_samples if i % 2 == 0 else x_ski_samples[::-1]
+                    for x_ski in xs:
+                        _, by = ski_to_blank(y_ski, x_ski + core_y_across)
+                        feed_move(bx, by, depth, profile_params.cutting_feed)
 
-                for x_offset in x_range:
-                    moves.append(Move(core_x + x_offset, y + core_y, z_roughing, is_rapid=False, feed=profile_params.cutting_feed))
-                    gcode_lines.append(f"G01 X{core_x + x_offset:.3f} Y{y + core_y:.3f} F{profile_params.cutting_feed:.1f}")
+                    rapid(bx, by_start if i % 2 == 1 else by_end, profile_params.clearance_height)
 
-                moves.append(Move(core_x + x_range[-1], y + core_y, profile_params.clearance_height, is_rapid=True))
-                gcode_lines.append(f"G00 Z{profile_params.clearance_height:.3f}")
-
-    # Postamble
-    gcode_lines.append(f"G00 Z{profile_params.clearance_height:.3f}")
-    gcode_lines.append("M05")
-    gcode_lines.append("M30")
-
-    gcode_string = "\n".join(gcode_lines)
-    return gcode_string, moves
+    gcode += [f"G00 Z{profile_params.clearance_height:.3f}", "M05", "M30"]
+    return "\n".join(gcode), moves
