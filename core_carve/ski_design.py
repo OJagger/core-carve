@@ -51,6 +51,7 @@ class SkiPlanformParams:
     # Main dimensions
     length: float = 1800.0
     waist_w: float = 96.0
+    sidecut_radius: float = 16000.0  # mm — circle radius; cx = waist_w/2 + R
     tip_l: float = 300.0
     tip_w: float = 130.0
     tail_l: float = 200.0
@@ -79,8 +80,21 @@ class SkiPlanformParams:
 
     _KEYS = None  # populated lazily
 
+    _DIMENSION_KEYS = {
+        "length", "waist_w", "sidecut_radius", "tip_w", "tail_w", "tip_l", "tail_l",
+        "setback", "tip_trans_len", "tail_trans_len",
+    }
+    _ARM_KEYS = {
+        "tip_apex_arm", "tip_junc_arm", "tip_trans_junc_arm", "tip_trans_arc_arm",
+        "tail_trans_arc_arm", "tail_trans_junc_arm", "tail_junc_arm", "tail_apex_arm",
+    }
+
     def to_dict(self) -> dict:
-        return asdict(self)
+        flat = asdict(self)
+        return {
+            "dimensions":   {k: flat[k] for k in self._DIMENSION_KEYS if k in flat},
+            "control_arms": {k: flat[k] for k in self._ARM_KEYS if k in flat},
+        }
 
     @classmethod
     def _planform_keys(cls):
@@ -89,8 +103,14 @@ class SkiPlanformParams:
 
     @classmethod
     def from_dict(cls, d: dict) -> "SkiPlanformParams":
+        if "dimensions" in d or "control_arms" in d:
+            flat: dict = {}
+            flat.update(d.get("dimensions", {}))
+            flat.update(d.get("control_arms", {}))
+        else:
+            flat = d  # backward-compat with old flat format
         keys = cls._planform_keys()
-        return cls(**{k: float(v) for k, v in d.items() if k in keys})
+        return cls(**{k: float(v) for k, v in flat.items() if k in keys})
 
     @classmethod
     def from_json(cls, path) -> "SkiPlanformParams":
@@ -100,10 +120,12 @@ class SkiPlanformParams:
     def save_to_json(self, path) -> None:
         p = Path(path)
         existing = {}
-        if p.exists():
+        if p.exists() and p.stat().st_size > 0:
             with open(p) as f:
                 existing = json.load(f)
-        existing.update(self.to_dict())
+        grouped = self.to_dict()
+        existing.setdefault("dimensions", {}).update(grouped["dimensions"])
+        existing.setdefault("control_arms", {}).update(grouped["control_arms"])
         with open(p, "w") as f:
             json.dump(existing, f, indent=2)
 
@@ -161,12 +183,12 @@ def build_ski_outline(
     tip_trans_y = p.tip_l + p.tip_trans_len
     tail_trans_y = tail_contact - p.tail_trans_len
 
-    # Sidecut circle (still fit through junction widths — same design intent)
-    cx, cy, R = fit_sidecut_circle(
-        (p.tip_w / 2.0, p.tip_l),
-        (p.waist_w / 2.0, y_mid),
-        (p.tail_w / 2.0, tail_contact),
-    )
+    # Sidecut circle: defined directly by waist_w and sidecut_radius.
+    # Centre is (sidecut_radius + waist_w/2) from centreline at the waist position,
+    # so the right edge of the arc at the waist equals exactly waist_w/2.
+    R  = p.sidecut_radius
+    cy = y_mid
+    cx = p.waist_w / 2.0 + R
 
     # Arc endpoints
     x_tip = cx - np.sqrt(max(R**2 - (tip_trans_y - cy)**2, 0.0))

@@ -111,13 +111,13 @@ class DesignCanvas(FigureCanvas):
     def _setup_axes(self):
         self.fig.clear()
         gs = GridSpec(2, 2, figure=self.fig,
-                      height_ratios=[1.4, 1], hspace=0.45, wspace=0.35)
+                      height_ratios=[1, 1.5], hspace=0.32, wspace=0.22)
         self.ax_tip  = self.fig.add_subplot(gs[0, 0])
         self.ax_tail = self.fig.add_subplot(gs[0, 1])
         self.ax      = self.fig.add_subplot(gs[1, :])
         for ax in (self.ax_tip, self.ax_tail, self.ax):
             _style_ax(ax)
-        self.fig.tight_layout(pad=1.2)
+        self.fig.tight_layout(pad=0.5)
         self.draw()
 
     def _clear_axes(self):
@@ -205,7 +205,7 @@ class DesignCanvas(FigureCanvas):
         pad = max(params.tip_w * 0.4, 30.0)
         ax_t.set_xlim(-pad * 0.2, r.tip_trans_y + pad * 0.8)
         ax_t.set_ylim(-(params.tip_w / 2 + pad * 0.6), params.tip_w / 2 + pad * 0.6)
-        ax_t.set_aspect("equal")
+        ax_t.set_aspect("equal", adjustable="datalim")
         ax_t.set_title("Tip", fontsize=9)
         ax_t.set_xlabel("Along (mm)", fontsize=7)
         ax_t.set_ylabel("Across (mm)", fontsize=7)
@@ -221,7 +221,7 @@ class DesignCanvas(FigureCanvas):
         pad = max(params.tail_w * 0.4, 30.0)
         ax_tl.set_xlim(r.tail_trans_y - pad * 0.8, params.length + pad * 0.2)
         ax_tl.set_ylim(-(params.tail_w / 2 + pad * 0.6), params.tail_w / 2 + pad * 0.6)
-        ax_tl.set_aspect("equal")
+        ax_tl.set_aspect("equal", adjustable="datalim")
         ax_tl.set_title("Tail", fontsize=9)
         ax_tl.set_xlabel("Along (mm)", fontsize=7)
         ax_tl.set_ylabel("Across (mm)", fontsize=7)
@@ -259,10 +259,12 @@ class DesignPanel(QWidget):
         # Ski dimensions
         dim = QGroupBox("Ski Dimensions")
         dl = QFormLayout(dim)
-        self.f_length  = _FloatField(1800.0)
-        self.f_waist_w = _FloatField(96.0)
+        self.f_length      = _FloatField(1800.0)
+        self.f_waist_w     = _FloatField(96.0)
+        self.f_sidecut_r   = _FloatField(16.0)   # m — stored in params as mm
         dl.addRow("Length (mm):", self.f_length)
         dl.addRow("Waist width (mm):", self.f_waist_w)
+        dl.addRow("Sidecut radius (m):", self.f_sidecut_r)
         root.addWidget(dim)
 
         # Tip & Tail widths
@@ -315,18 +317,10 @@ class DesignPanel(QWidget):
         ttal.addRow("Apex arm (mm):",          self.f_tail_apex_arm)
         root.addWidget(tail_arms)
 
-        # Derived
-        der = QGroupBox("Derived")
-        derl = QFormLayout(der)
-        self.lbl_radius = QLabel("—")
-        self.lbl_radius.setStyleSheet("color: #80c0ff;")
-        derl.addRow("Sidecut radius:", self.lbl_radius)
-        root.addWidget(der)
-
         # Actions
         btn = QHBoxLayout()
-        self.btn_load = QPushButton("Load JSON…")
-        self.btn_save = QPushButton("Save JSON…")
+        self.btn_load = QPushButton("Load ski")
+        self.btn_save = QPushButton("Save ski")
         self.btn_use  = QPushButton("Use as Planform →")
         self.btn_use.setStyleSheet("font-weight:bold;")
         btn.addWidget(self.btn_load)
@@ -339,10 +333,11 @@ class DesignPanel(QWidget):
 
     def load_params(self, p: SkiPlanformParams):
         for field, val in [
-            (self.f_length,  p.length),  (self.f_waist_w, p.waist_w),
-            (self.f_tip_w,   p.tip_w),   (self.f_tail_w,  p.tail_w),
-            (self.f_tip_l,   p.tip_l),   (self.f_tail_l,  p.tail_l),
-            (self.f_setback, p.setback),
+            (self.f_length,    p.length),  (self.f_waist_w, p.waist_w),
+            (self.f_sidecut_r, p.sidecut_radius / 1000.0),  # mm → m for display
+            (self.f_tip_w,     p.tip_w),   (self.f_tail_w,  p.tail_w),
+            (self.f_tip_l,     p.tip_l),   (self.f_tail_l,  p.tail_l),
+            (self.f_setback,   p.setback),
             (self.f_tip_trans,  p.tip_trans_len),
             (self.f_tail_trans, p.tail_trans_len),
             (self.f_tip_apex_arm,       p.tip_apex_arm),
@@ -362,6 +357,7 @@ class DesignPanel(QWidget):
         return SkiPlanformParams(
             length=self.f_length.value(),
             waist_w=self.f_waist_w.value(),
+            sidecut_radius=max(1000.0, self.f_sidecut_r.value() * 1000.0),  # m → mm
             tip_l=self.f_tip_l.value(),
             tip_w=self.f_tip_w.value(),
             tail_l=self.f_tail_l.value(),
@@ -379,12 +375,10 @@ class DesignPanel(QWidget):
             tail_apex_arm=max(1.0, self.f_tail_apex_arm.value()),
         )
 
-    def set_sidecut_radius(self, R: float):
-        self.lbl_radius.setText(f"{R/1000:.2f} m  ({R:.0f} mm)")
-
     def all_fields(self):
         return [
-            self.f_length, self.f_waist_w, self.f_tip_w, self.f_tail_w,
+            self.f_length, self.f_waist_w, self.f_sidecut_r,
+            self.f_tip_w, self.f_tail_w,
             self.f_tip_l, self.f_tail_l, self.f_setback,
             self.f_tip_trans, self.f_tail_trans,
             self.f_tip_apex_arm, self.f_tip_junc_arm,
@@ -452,8 +446,6 @@ class DesignTab(QWidget):
         except (ValueError, ZeroDivisionError):
             return
         self._result = result
-        if not quick:
-            self.panel.set_sidecut_radius(result.R)
         self.canvas.plot_design(result, p)
 
     def _update_from_params(self, p: SkiPlanformParams):

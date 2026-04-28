@@ -1,5 +1,6 @@
+import json
 import sys
-from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget
+from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QFileDialog, QMessageBox
 from PyQt5.QtCore import Qt
 
 from core_carve.tab_design import DesignTab
@@ -19,18 +20,42 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.tabs)
 
         self.design_tab = DesignTab()
-        self.tabs.addTab(self.design_tab, "Design")
+        self.tabs.addTab(self.design_tab, "Outline Design")
         self.design_tab.set_outline_callback(self._receive_designed_outline)
 
         self.geometry_tab = GeometryTab()
-        self.tabs.addTab(self.geometry_tab, "Geometry")
+        self.tabs.addTab(self.geometry_tab, "Core Design")
 
         # Blank and G-code tabs (created when geometry is loaded)
         self.blank_tab = None
         self.gcode_tab = None
 
+        # Wire geometry tab "Save ski" to combined save (includes planform params)
+        self.geometry_tab.panel.btn_save_json.clicked.disconnect(
+            self.geometry_tab._save_json
+        )
+        self.geometry_tab.panel.btn_save_json.clicked.connect(self._save_ski_file)
+
         # Connect to geometry updates
         self.tabs.currentChanged.connect(self._check_geometry_loaded)
+
+    def _save_ski_file(self):
+        """Save all ski params (planform + core) to one JSON file."""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Ski Definition", "ski_params.json",
+            "JSON Files (*.json);;All Files (*)"
+        )
+        if not path:
+            return
+        try:
+            ski_data = {}
+            ski_data.update(self.design_tab.panel.get_params().to_dict())
+            from dataclasses import asdict
+            ski_data["core"] = asdict(self.geometry_tab.panel.get_params())
+            with open(path, "w") as f:
+                json.dump(ski_data, f, indent=2)
+        except Exception as exc:
+            QMessageBox.critical(self, "Save Error", str(exc))
 
     def _receive_designed_outline(self, outline):
         """Accept a designed outline from the Design tab and push it to the Geometry tab."""

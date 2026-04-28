@@ -162,8 +162,8 @@ class ParameterPanel(QWidget):
         self.lbl_dxf = QLabel("No file loaded")
         self.lbl_dxf.setStyleSheet("color: #888;")
 
-        self.btn_load_json = QPushButton("Load Params JSON…")
-        self.btn_save_json = QPushButton("Save Params JSON…")
+        self.btn_load_json = QPushButton("Load ski")
+        self.btn_save_json = QPushButton("Save ski")
 
         for w in (self.btn_load_dxf, self.lbl_dxf,
                   self.btn_load_json, self.btn_save_json):

@@ -23,14 +23,21 @@ class SkiParams:
     underfoot_length: float = 300.0  # mm — flat-thickness region centred on waist
 
     def to_json(self, path: str | Path) -> None:
-        with open(path, "w") as f:
-            json.dump(asdict(self), f, indent=2)
+        p = Path(path)
+        existing = {}
+        if p.exists() and p.stat().st_size > 0:
+            with open(p) as f:
+                existing = json.load(f)
+        existing["core"] = asdict(self)
+        with open(p, "w") as f:
+            json.dump(existing, f, indent=2)
 
     @classmethod
     def from_json(cls, path: str | Path) -> "SkiParams":
         with open(path) as f:
             data = json.load(f)
-        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+        flat = data.get("core", data)  # grouped format or flat backward-compat
+        return cls(**{k: v for k, v in flat.items() if k in cls.__dataclass_fields__})
 
 
 @dataclass
