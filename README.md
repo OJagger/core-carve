@@ -1,6 +1,6 @@
 # Core Carve — SkiNC G-code Generator
 
-A Python desktop application for designing and generating G-code for CNC ski core manufacturing. Design ski core geometry, position blanks, and generate toolpaths with interactive visualization.
+A Python desktop application for ski design and generation of G-code for CNC core profiling. Design ski planform and core geometry, position blanks, and generate toolpaths with interactive visualization.
 
 **Status:** Early development  
 **License:** AGPL-3.0-or-later

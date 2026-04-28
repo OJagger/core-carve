@@ -2,6 +2,7 @@ import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget
 from PyQt5.QtCore import Qt
 
+from core_carve.tab_design import DesignTab
 from core_carve.tab_geometry import GeometryTab
 from core_carve.tab_blank import BlankTab
 from core_carve.tab_gcode import GcodeTab
@@ -17,8 +18,12 @@ class MainWindow(QMainWindow):
         self.tabs.setTabPosition(QTabWidget.North)
         self.setCentralWidget(self.tabs)
 
+        self.design_tab = DesignTab()
+        self.tabs.addTab(self.design_tab, "Design")
+        self.design_tab.set_outline_callback(self._receive_designed_outline)
+
         self.geometry_tab = GeometryTab()
-        self.tabs.addTab(self.geometry_tab, "1 · Geometry")
+        self.tabs.addTab(self.geometry_tab, "Geometry")
 
         # Blank and G-code tabs (created when geometry is loaded)
         self.blank_tab = None
@@ -27,6 +32,12 @@ class MainWindow(QMainWindow):
         # Connect to geometry updates
         self.tabs.currentChanged.connect(self._check_geometry_loaded)
 
+    def _receive_designed_outline(self, outline):
+        """Accept a designed outline from the Design tab and push it to the Geometry tab."""
+        self.geometry_tab._outline = outline
+        self.geometry_tab._update_geometry()
+        self.tabs.setCurrentWidget(self.geometry_tab)
+
     def _check_geometry_loaded(self):
         """Check if geometry is loaded and create blank and G-code tabs if needed."""
         if self.geometry_tab._geom is None:
@@ -34,9 +45,9 @@ class MainWindow(QMainWindow):
         params = self.geometry_tab.panel.get_params()
         if self.blank_tab is None:
             self.blank_tab = BlankTab(self.geometry_tab._geom, params)
-            self.tabs.addTab(self.blank_tab, "2 · Core Blank")
+            self.tabs.addTab(self.blank_tab, "Core Blank")
             self.gcode_tab = GcodeTab(self.geometry_tab._geom, params, self.blank_tab)
-            self.tabs.addTab(self.gcode_tab, "3 · G-code")
+            self.tabs.addTab(self.gcode_tab, "G-code")
         else:
             self.blank_tab.geom = self.geometry_tab._geom
             self.blank_tab.params = params
