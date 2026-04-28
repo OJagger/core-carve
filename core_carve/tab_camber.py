@@ -97,7 +97,7 @@ class CamberCanvas(FigureCanvas):
     # ── Drawing ───────────────────────────────────────────────────────────────
 
     def plot_camber(self, params: CamberParams, ski_length: float | None = None):
-        """Plot camber line with control points and horizontal constraint arms."""
+        """Plot camber line with draggable control points (ski-outline style)."""
         if ski_length is not None:
             self._ski_length = ski_length
         self._params = params
@@ -111,52 +111,56 @@ class CamberCanvas(FigureCanvas):
         tail_junc = L - params.tail_rocker_length
         center_y = (tip_junc + tail_junc) / 2.0
         z_max = max(params.tip_rocker_height, params.tail_rocker_height, params.camber_amount, 1.0)
-        arm_len = L * 0.04  # length of horizontal constraint arm markers
+        arm_len = L * 0.04
 
         # Camber curve
-        ax.plot(y_pts, z_pts, color="#60cc60", linewidth=2.5, label="Camber line", zorder=3)
+        ax.plot(y_pts, z_pts, color="#80c0ff", linewidth=2.0, label="Camber line", zorder=3)
 
         # Snow contact reference
-        ax.axhline(y=0, color="#666666", linewidth=1, alpha=0.6, label="Snow contact")
+        ax.axhline(y=0, color="#555555", linewidth=1, alpha=0.8, label="Snow contact")
 
-        # ── Control points ────────────────────────────────────────────────────
-        # Tip end (elevated, not directly draggable — controlled by height field)
-        ax.plot(0, params.tip_rocker_height, "o", color="#ff6060", markersize=9,
-                zorder=5, label="Tip/tail end")
-        ax.annotate(f"  {params.tip_rocker_height:.0f} mm", (0, params.tip_rocker_height),
-                    fontsize=8, color="#cccccc")
-
-        # Tip junction (draggable — x position = tip_rocker_length)
-        ax.plot(tip_junc, 0.0, "s", color="#4488ff", markersize=9, zorder=5,
-                label="Rocker junction")
-        # Horizontal constraint arm at tip junction
+        # ── Control arms (dashed lines to draggable points) ───────────────────
+        # Tip end → tip junction arm
+        ax.plot([0, tip_junc], [params.tip_rocker_height, 0.0],
+                color="#ff6633", lw=0.8, ls="--", alpha=0.7)
+        # Tip junction horizontal arm
         ax.plot([tip_junc - arm_len, tip_junc + arm_len], [0.0, 0.0],
-                color="#4488ff", linewidth=2, alpha=0.7)
-
-        # Centre camber peak (draggable vertically)
-        ax.plot(center_y, params.camber_amount, "^", color="#ffcc00", markersize=9,
-                zorder=5, label="Camber peak")
-        # Horizontal constraint arm at peak
+                color="#ff6633", lw=0.8, ls="--", alpha=0.7)
+        # Camber peak horizontal arm
         ax.plot([center_y - arm_len, center_y + arm_len], [params.camber_amount, params.camber_amount],
-                color="#ffcc00", linewidth=2, alpha=0.7)
-        ax.annotate(f"  {params.camber_amount:.1f} mm", (center_y, params.camber_amount),
-                    fontsize=8, color="#cccccc")
-
-        # Tail junction (draggable)
-        ax.plot(tail_junc, 0.0, "s", color="#4488ff", markersize=9, zorder=5)
+                color="#ff6633", lw=0.8, ls="--", alpha=0.7)
+        # Tail junction horizontal arm
         ax.plot([tail_junc - arm_len, tail_junc + arm_len], [0.0, 0.0],
-                color="#4488ff", linewidth=2, alpha=0.7)
+                color="#ff6633", lw=0.8, ls="--", alpha=0.7)
+        # Tail end → tail junction arm
+        ax.plot([tail_junc, L], [0.0, params.tail_rocker_height],
+                color="#ff6633", lw=0.8, ls="--", alpha=0.7)
 
-        # Tail end
-        ax.plot(L, params.tail_rocker_height, "o", color="#ff6060", markersize=9, zorder=5)
-        ax.annotate(f"  {params.tail_rocker_height:.0f} mm", (L, params.tail_rocker_height),
-                    fontsize=8, color="#cccccc")
+        # ── Control points (red circles, matching ski-outline style) ──────────
+        # Spline endpoints (tip and tail ends)
+        ax.plot(0, params.tip_rocker_height, "o", color="#ff6633", markersize=7, zorder=5)
+        ax.plot(L, params.tail_rocker_height, "o", color="#ff6633", markersize=7, zorder=5)
+
+        # Draggable junction points
+        ax.plot(tip_junc, 0.0, "o", color="#ff6633", markersize=7, zorder=5,
+                label="Drag: junction / peak")
+        ax.plot(tail_junc, 0.0, "o", color="#ff6633", markersize=7, zorder=5)
+        ax.plot(center_y, params.camber_amount, "o", color="#ff6633", markersize=7, zorder=5)
+
+        # Labels
+        ax.annotate(f" {params.tip_rocker_height:.0f} mm", (0, params.tip_rocker_height),
+                    fontsize=7, color="#aaaaaa", va="bottom")
+        ax.annotate(f" {params.tail_rocker_height:.0f} mm", (L, params.tail_rocker_height),
+                    fontsize=7, color="#aaaaaa", va="bottom")
+        ax.annotate(f" {params.camber_amount:.1f} mm", (center_y, params.camber_amount),
+                    fontsize=7, color="#aaaaaa", va="bottom")
 
         ax.set_xlim(-50, L + 100)
-        ax.set_ylim(-5, z_max * 1.3 + 5)
+        # Use at least 60 mm on z axis to avoid over-exaggeration
+        ax.set_ylim(-3, max(z_max * 1.2, 60))
         ax.set_xlabel("Along ski (mm)")
         ax.set_ylabel("Vertical height (mm)")
-        ax.set_title("Camber Profile (Side View) — drag blue squares to adjust junctions")
+        ax.set_title("Camber Profile — drag red circles to adjust junctions/heights")
         ax.grid(True, alpha=0.2, color="#555555")
         ax.legend(fontsize=7, loc="upper center", bbox_to_anchor=(0.5, -0.18),
                   ncol=3, facecolor="#333333", labelcolor="#dddddd")
