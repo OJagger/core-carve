@@ -120,10 +120,12 @@ class MainWindow(QMainWindow):
                 self.camber_tab.panel.set_params(camber_params)
                 self.camber_tab._update_preview()
 
-            # Load core design params
-            if "core" in ski_data:
-                from core_carve.ski_geometry import SkiParams
-                core_params = SkiParams(**ski_data["core"])
+            # Load core design params (supports nested "core" key or flat top-level fields)
+            from core_carve.ski_geometry import SkiParams
+            flat = ski_data.get("core", ski_data)
+            core_kwargs = {k: v for k, v in flat.items() if k in SkiParams.__dataclass_fields__}
+            if core_kwargs:
+                core_params = SkiParams(**core_kwargs)
                 self.geometry_tab.panel.set_params(core_params)
                 self.geometry_tab._update_geometry()
 
