@@ -340,6 +340,15 @@ class GcodeCanvas(FigureCanvas):
         ax.set_zlabel("Z (mm)")
         ax.set_title("3D Toolpath (Right-click to rotate, Scroll to zoom)")
 
+        # True aspect ratio
+        x_vals = [m.x for m in moves]
+        y_vals = [m.y for m in moves]
+        z_vals = [m.z for m in moves]
+        x_rng = max(x_vals) - min(x_vals) or 1.0
+        y_rng = max(y_vals) - min(y_vals) or 1.0
+        z_rng = max(z_vals) - min(z_vals) or 1.0
+        ax.set_box_aspect([x_rng, y_rng, z_rng])
+
         self.fig.tight_layout(pad=2.0)
         self.draw()
 
@@ -577,8 +586,8 @@ class GcodeTab(QWidget):
         scroll.setWidget(self.panel)
         splitter.addWidget(scroll)
 
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
 
         layout.addWidget(splitter)
 
