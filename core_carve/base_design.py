@@ -179,13 +179,13 @@ def compute_base_outline(outline: np.ndarray, params: BaseParams) -> np.ndarray:
     left_at_edge_end_full = np.interp(edge_end_y, y_full, left_full)
 
     left_side = np.vstack([
-        np.column_stack([left_full[tail_mask], right_tail_y]),    # tail section (full width)
+        np.column_stack([left_full[tail_mask], y_full[tail_mask]])[::-1],  # tail: y_max→edge_end_y
         [[left_at_edge_end_full, edge_end_y]],
         [[left_at_edge_end_inset, edge_end_y]],
         np.column_stack([left_inset, y_edge])[::-1],              # edge section inset, reversed
         [[left_at_edge_start_inset, edge_start_y]],
         [[left_at_edge_start_full, edge_start_y]],
-        np.column_stack([left_full[tip_mask], right_tip_y]),      # tip section (full width)
+        np.column_stack([left_full[tip_mask], y_full[tip_mask]])[::-1],    # tip: edge_start_y→y_min
     ])
 
     # Combine: right side goes tip→tail, left side goes tail→tip

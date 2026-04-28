@@ -62,7 +62,7 @@ class BaseCanvas(FigureCanvas):
             # Close the polygon for plotting
             poly_closed = np.vstack([base_poly, base_poly[0]])
             ax.plot(poly_closed[:, 1], poly_closed[:, 0], color="#80c0ff",
-                    linewidth=2.0, label="Base outline")
+                    linewidth=1.0, label="Base outline")
 
         y_min, y_max = outline[:, 1].min(), outline[:, 1].max()
         edge_start_y = y_min + params.tip_offset
