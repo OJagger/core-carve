@@ -309,9 +309,11 @@ class GcodeCanvas(FigureCanvas):
             self.plot_toolpaths(self._moves)
 
     def plot_toolpaths_3d(self, moves):
-        """Plot toolpaths in 3D with rotation and zoom controls."""
+        """Plot toolpaths in 3D using Line3DCollection for fast rendering."""
         if not moves:
             return
+
+        from mpl_toolkits.mplot3d.art3d import Line3DCollection
 
         self.fig.clear()
         ax = self.fig.add_subplot(111, projection="3d")
@@ -327,46 +329,62 @@ class GcodeCanvas(FigureCanvas):
         ax.yaxis.label.set_color("#cccccc")
         ax.zaxis.label.set_color("#cccccc")
 
-        # Group moves by Z depth for coloring
-        z_values = [m.z for m in moves]
+        # Downsample to max 4000 displayed segments
+        MAX_SEGS = 4000
+        step = max(1, (len(moves) - 1) // MAX_SEGS)
+        sampled = moves[::step]
+        if sampled[-1] is not moves[-1]:
+            sampled = sampled + [moves[-1]]
+
+        z_values = [m.z for m in sampled]
         z_min, z_max = min(z_values), max(z_values)
         z_range = z_max - z_min if z_max != z_min else 1.0
 
-        # Plot moves as line segments
-        for i in range(1, len(moves)):
-            prev_move = moves[i - 1]
-            curr_move = moves[i]
-            z_norm = (curr_move.z - z_min) / z_range if z_range > 0 else 0.5
+        # Build two collections: cutting moves and rapid moves
+        cut_segs, cut_colors = [], []
+        rapid_segs, rapid_colors = [], []
 
+        for i in range(1, len(sampled)):
+            p, c = sampled[i - 1], sampled[i]
+            seg = [[p.x, p.y, p.z], [c.x, c.y, c.z]]
+            z_norm = (c.z - z_min) / z_range if z_range > 0 else 0.5
             color = cm.coolwarm(z_norm)
-            linestyle = "--" if curr_move.is_rapid else "-"
-            linewidth = 0.5 if curr_move.is_rapid else 1.5
+            if c.is_rapid:
+                rapid_segs.append(seg)
+                rapid_colors.append(color)
+            else:
+                cut_segs.append(seg)
+                cut_colors.append(color)
 
-            ax.plot(
-                [prev_move.x, curr_move.x],
-                [prev_move.y, curr_move.y],
-                [prev_move.z, curr_move.z],
-                color=color,
-                linestyle=linestyle,
-                linewidth=linewidth,
-                alpha=0.6
-            )
+        if cut_segs:
+            lc = Line3DCollection(cut_segs, colors=cut_colors, linewidths=1.5, alpha=0.7)
+            ax.add_collection3d(lc)
+        if rapid_segs:
+            rl = Line3DCollection(rapid_segs, colors=rapid_colors, linewidths=0.5, alpha=0.3)
+            ax.add_collection3d(rl)
+
+        # Set axis limits explicitly (required after add_collection3d)
+        xs = [m.x for m in sampled]
+        ys = [m.y for m in sampled]
+        zs = [m.z for m in sampled]
+        ax.set_xlim(min(xs), max(xs))
+        ax.set_ylim(min(ys), max(ys))
+        ax.set_zlim(min(zs), max(zs))
 
         ax.set_xlabel("X (mm)")
         ax.set_ylabel("Y (mm)")
         ax.set_zlabel("Z (mm)")
-        ax.set_title("3D Toolpath (Right-click to rotate, Scroll to zoom)")
+        n_shown = len(sampled) - 1
+        ax.set_title(f"3D Toolpath — {n_shown} segments shown (of {len(moves)-1})")
 
         # True aspect ratio
-        x_vals = [m.x for m in moves]
-        y_vals = [m.y for m in moves]
-        z_vals = [m.z for m in moves]
-        x_rng = max(x_vals) - min(x_vals) or 1.0
-        y_rng = max(y_vals) - min(y_vals) or 1.0
-        z_rng = max(z_vals) - min(z_vals) or 1.0
+        x_rng = (max(xs) - min(xs)) or 1.0
+        y_rng = (max(ys) - min(ys)) or 1.0
+        z_rng = (max(zs) - min(zs)) or 1.0
         ax.set_box_aspect([x_rng, y_rng, z_rng])
 
-        self.fig.tight_layout(pad=2.0)
+        # Fill the full pane width — skip tight_layout which shrinks 3D axes
+        self.fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
         self.draw()
 
         # Enable mouse controls
