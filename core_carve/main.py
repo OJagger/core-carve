@@ -127,6 +127,11 @@ class MainWindow(QMainWindow):
                 self.geometry_tab.panel.set_params(core_params)
                 self.geometry_tab._update_geometry()
 
+            # Create / update downstream tabs (blank, gcode, profile) and sync camber length
+            self._check_geometry_loaded()
+            if self.geometry_tab._geom is not None:
+                self.camber_tab.set_ski_length(self.geometry_tab._geom.ski_length)
+
             return True
         except Exception as e:
             QMessageBox.critical(self, "Load Error", f"Failed to load ski definition: {str(e)}")
