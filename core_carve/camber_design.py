@@ -13,15 +13,15 @@ from scipy.interpolate import CubicSpline
 class CamberParams:
     """Camber design parameters for vertical ski shape."""
     # Tip rocker
-    tip_rocker_length: float = 150.0    # mm from tip
-    tip_rocker_height: float = 30.0     # mm rise from contact point
+    tip_rocker_length: float = 150.0    # mm from tip to rocker/camber junction
+    tip_rocker_height: float = 30.0     # mm rise at tip end
 
     # Camber underfoot
-    camber_amount: float = 20.0         # mm rise at center (positive = arch)
+    camber_amount: float = 5.0          # mm rise at centre (positive = arch up)
 
     # Tail rocker
-    tail_rocker_length: float = 150.0   # mm from tail
-    tail_rocker_height: float = 30.0    # mm rise from contact point
+    tail_rocker_length: float = 150.0   # mm from tail to rocker/camber junction
+    tail_rocker_height: float = 20.0    # mm rise at tail end
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -39,69 +39,60 @@ class CamberParams:
 
 def compute_camber_line(ski_length: float, params: CamberParams) -> tuple[np.ndarray, np.ndarray]:
     """
-    Compute camber line with 3 spline sections: tip rocker, camber, tail rocker.
+    Compute camber line as three spline sections.
 
-    The camber line is the bottom surface of the ski. It touches snow at the
-    tip and tail rocker ends (zero gradient), and arches up in the middle (camber).
-
-    Args:
-        ski_length: Total ski length (mm)
-        params: CamberParams
+    Section 1 (tip rocker): y=0 → y=tip_rocker_length
+      - Free tangent at the tip end, horizontal tangent at the junction (z=0).
+    Section 2 (camber): y=tip_rocker_length → y=ski_length-tail_rocker_length
+      - Horizontal tangent at both ends (z=0) and at the centre peak.
+    Section 3 (tail rocker): y=ski_length-tail_rocker_length → y=ski_length
+      - Horizontal tangent at the junction (z=0), free tangent at the tail end.
 
     Returns:
-        (y_points, z_points) where y is along ski, z is vertical (up from snow contact)
+        (y_points, z_points) where z is vertical height above snow contact.
     """
-    # Key points along ski length (where rocker and camber sections meet)
-    tip_rocker_end_y = params.tip_rocker_length
-    tail_rocker_start_y = ski_length - params.tail_rocker_length
-    center_y = ski_length / 2.0
+    tip_junc = params.tip_rocker_length
+    tail_junc = ski_length - params.tail_rocker_length
+    center_y = (tip_junc + tail_junc) / 2.0
 
-    # Vertical positions: z=0 at rocker/camber boundaries (where ski touches snow)
-    # Rocker endpoints have z=0 (snow contact with zero gradient)
-    rocker_contact_z = 0.0
+    # Guard against degenerate params
+    tip_junc = min(tip_junc, ski_length * 0.4)
+    tail_junc = max(tail_junc, ski_length * 0.6)
 
-    # But the rockers themselves arc up from the ends (tip and tail extremes)
-    tip_extent_z = params.tip_rocker_height
-    tail_extent_z = params.tail_rocker_height
-    center_z = params.camber_amount
+    # ── Section 1: tip rocker ─────────────────────────────────────────────────
+    # y: 0 → tip_junc,  z: tip_height → 0
+    # Horizontal tangent (dz/dy = 0) at the junction end.
+    # At the tip end we let the spline be natural (not constrained).
+    tip_y = np.array([0.0, tip_junc])
+    tip_z = np.array([params.tip_rocker_height, 0.0])
+    # bc_type: (order, value) — first derivative at each end
+    tip_spline = CubicSpline(tip_y, tip_z, bc_type=((2, 0.0), (1, 0.0)))
 
-    # Create control points for 3 splines
-    # Tip rocker: from tip (raised) to rocker start (touches snow, z=0)
-    # Curve down from tip_extent toward contact at rocker_end
-    tip_y = np.array([0.0, params.tip_rocker_length / 3.0, params.tip_rocker_length * 2 / 3.0, tip_rocker_end_y])
-    tip_z = np.array([tip_extent_z, params.tip_rocker_height * 0.7, params.tip_rocker_height * 0.3, rocker_contact_z])
+    # ── Section 2: camber ─────────────────────────────────────────────────────
+    # Endpoints z=0, centre peak z=camber_amount, all with horizontal tangents.
+    camber_y = np.array([tip_junc, center_y, tail_junc])
+    camber_z = np.array([0.0, params.camber_amount, 0.0])
+    # Enforce horizontal first derivative at all three points using known-derivative spline
+    camber_spline = CubicSpline(
+        camber_y, camber_z,
+        bc_type=((1, 0.0), (1, 0.0)),
+    )
 
-    # Camber section: from rocker start (z=0) through center peak, to rocker end (z=0)
-    camber_y = np.array([tip_rocker_end_y, center_y, tail_rocker_start_y])
-    camber_z = np.array([rocker_contact_z, center_z, rocker_contact_z])
+    # ── Section 3: tail rocker ────────────────────────────────────────────────
+    tail_y = np.array([tail_junc, ski_length])
+    tail_z = np.array([0.0, params.tail_rocker_height])
+    tail_spline = CubicSpline(tail_y, tail_z, bc_type=((1, 0.0), (2, 0.0)))
 
-    # Tail rocker: from rocker start (touches snow, z=0) to tail (raised)
-    # Curve up from contact to tail_extent
-    tail_y = np.array([tail_rocker_start_y, tail_rocker_start_y + (ski_length - tail_rocker_start_y) / 3.0,
-                       tail_rocker_start_y + 2 * (ski_length - tail_rocker_start_y) / 3.0, ski_length])
-    tail_z = np.array([rocker_contact_z, tail_extent_z * 0.3, tail_extent_z * 0.7, tail_extent_z])
+    # ── Sample ────────────────────────────────────────────────────────────────
+    tip_pts = np.linspace(0.0, tip_junc, 80)
+    camber_pts = np.linspace(tip_junc, tail_junc, 120)
+    tail_pts = np.linspace(tail_junc, ski_length, 80)
 
-    # Create splines for each section
-    try:
-        tip_spline = CubicSpline(tip_y, tip_z, bc_type="natural")
-        camber_spline = CubicSpline(camber_y, camber_z, bc_type="natural")
-        tail_spline = CubicSpline(tail_y, tail_z, bc_type="natural")
+    y_out = np.concatenate([tip_pts, camber_pts[1:], tail_pts[1:]])
+    z_out = np.concatenate([
+        tip_spline(tip_pts),
+        camber_spline(camber_pts[1:]),
+        tail_spline(tail_pts[1:]),
+    ])
 
-        # Sample splines
-        tip_samples = np.linspace(0.0, tip_end_y, 50)
-        camber_samples = np.linspace(tip_end_y, tail_start_y, 100)
-        tail_samples = np.linspace(tail_start_y, ski_length, 50)
-
-        tip_z_samples = tip_spline(tip_samples)
-        camber_z_samples = camber_spline(camber_samples)
-        tail_z_samples = tail_spline(tail_samples)
-
-        y_points = np.concatenate([tip_samples, camber_samples[1:], tail_samples[1:]])
-        z_points = np.concatenate([tip_z_samples, camber_z_samples[1:], tail_z_samples[1:]])
-
-        return y_points, z_points
-    except Exception:
-        # Fallback to linear interpolation if spline fails
-        all_y = np.concatenate([tip_y, camber_y[1:], tail_y[1:]])
-        all_z = np.concatenate([tip_z, camber_z[1:], tail_z[1:]])
-        return all_y, all_z
+    return y_out, z_out
