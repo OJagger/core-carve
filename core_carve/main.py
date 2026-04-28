@@ -4,6 +4,7 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QFileDialog, 
 from PyQt5.QtCore import Qt
 
 from core_carve.tab_design import DesignTab
+from core_carve.tab_base import BaseTab
 from core_carve.tab_geometry import GeometryTab
 from core_carve.tab_blank import BlankTab
 from core_carve.tab_gcode import GcodeTab
@@ -22,6 +23,9 @@ class MainWindow(QMainWindow):
         self.design_tab = DesignTab()
         self.tabs.addTab(self.design_tab, "Outline Design")
         self.design_tab.set_outline_callback(self._receive_designed_outline)
+
+        self.base_tab = BaseTab()
+        self.tabs.addTab(self.base_tab, "Base Design")
 
         self.geometry_tab = GeometryTab()
         self.tabs.addTab(self.geometry_tab, "Core Design")
@@ -50,6 +54,7 @@ class MainWindow(QMainWindow):
         try:
             ski_data = {}
             ski_data.update(self.design_tab.panel.get_params().to_dict())
+            ski_data["base"] = self.base_tab.panel.get_params().to_dict()
             from dataclasses import asdict
             ski_data["core"] = asdict(self.geometry_tab.panel.get_params())
             with open(path, "w") as f:
@@ -58,10 +63,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Save Error", str(exc))
 
     def _receive_designed_outline(self, outline):
-        """Accept a designed outline from the Design tab and push it to the Geometry tab."""
+        """Accept a designed outline from the Design tab and push it to other tabs."""
+        self.base_tab.set_outline(outline)
         self.geometry_tab._outline = outline
         self.geometry_tab._update_geometry()
-        self.tabs.setCurrentWidget(self.geometry_tab)
+        self.tabs.setCurrentWidget(self.base_tab)
 
     def _check_geometry_loaded(self):
         """Check if geometry is loaded and create blank and G-code tabs if needed."""
