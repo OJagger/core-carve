@@ -8,6 +8,7 @@ from core_carve.tab_base import BaseTab
 from core_carve.tab_geometry import GeometryTab
 from core_carve.tab_blank import BlankTab
 from core_carve.tab_gcode import GcodeTab
+from core_carve.tab_profile import ProfileTab
 
 
 class MainWindow(QMainWindow):
@@ -30,9 +31,10 @@ class MainWindow(QMainWindow):
         self.geometry_tab = GeometryTab()
         self.tabs.addTab(self.geometry_tab, "Core Design")
 
-        # Blank and G-code tabs (created when geometry is loaded)
+        # Blank, G-code, and Profile tabs (created when geometry is loaded)
         self.blank_tab = None
         self.gcode_tab = None
+        self.profile_tab = None
 
         # Wire geometry tab "Save ski" to combined save (includes planform params)
         self.geometry_tab.panel.btn_save_json.clicked.disconnect(
@@ -70,7 +72,7 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(self.base_tab)
 
     def _check_geometry_loaded(self):
-        """Check if geometry is loaded and create blank and G-code tabs if needed."""
+        """Check if geometry is loaded and create blank, G-code, and profile tabs if needed."""
         if self.geometry_tab._geom is None:
             return
         params = self.geometry_tab.panel.get_params()
@@ -79,12 +81,16 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(self.blank_tab, "Core Blank")
             self.gcode_tab = GcodeTab(self.geometry_tab._geom, params, self.blank_tab)
             self.tabs.addTab(self.gcode_tab, "G-code")
+            self.profile_tab = ProfileTab(self.geometry_tab._geom, params, self.blank_tab)
+            self.tabs.addTab(self.profile_tab, "Profiling")
         else:
             self.blank_tab.geom = self.geometry_tab._geom
             self.blank_tab.params = params
             self.blank_tab._update_layout()
             self.gcode_tab.geom = self.geometry_tab._geom
             self.gcode_tab.params = params
+            self.profile_tab.geom = self.geometry_tab._geom
+            self.profile_tab.params = params
 
 
 def main():

@@ -1,0 +1,476 @@
+"""Tab — Core Profiling: thickness profile machining."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
+    QPushButton, QLabel, QLineEdit, QGroupBox, QFormLayout,
+    QMessageBox, QScrollArea, QSizePolicy, QFileDialog, QComboBox,
+)
+from PyQt5.QtCore import Qt, QTimer
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+import matplotlib.patches as patches
+import matplotlib.cm as cm
+from mpl_toolkits.mplot3d import Axes3D
+
+from core_carve.profile_generator import ProfileParams, generate_profile_gcode
+from core_carve.ski_geometry import SkiGeometry
+
+
+# ── Canvas ────────────────────────────────────────────────────────────────────
+
+class ProfileCanvas(FigureCanvas):
+    def __init__(self):
+        self.fig = Figure(facecolor="#1e1e1e", figsize=(12, 6))
+        super().__init__(self.fig)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.ax = None
+        self._setup_axes()
+        self._moves = None
+        self._playback_idx = 0
+        self._playback_speed_multiplier = 1
+        self._is_playing = False
+        self._playback_timer = QTimer()
+        self._playback_timer.timeout.connect(self._step_playback)
+        self._use_3d = False
+
+    def _setup_axes(self):
+        self.fig.clear()
+        self.ax = self.fig.add_subplot(111)
+        self.ax.set_facecolor("#2b2b2b")
+        self.ax.tick_params(colors="#cccccc", labelsize=8)
+        for spine in self.ax.spines.values():
+            spine.set_edgecolor("#555555")
+        self.fig.tight_layout(pad=2.0)
+        self.draw()
+
+    def plot_toolpaths(self, moves):
+        """Plot profiling toolpaths."""
+        if not moves:
+            return
+
+        self._setup_axes()
+        ax = self.ax
+
+        z_values = [m.z for m in moves]
+        z_min, z_max = min(z_values), max(z_values)
+        z_range = z_max - z_min if z_max != z_min else 1.0
+
+        for i in range(1, len(moves)):
+            prev_move = moves[i - 1]
+            curr_move = moves[i]
+            z_norm = (curr_move.z - z_min) / z_range if z_range > 0 else 0.5
+
+            color = cm.coolwarm(z_norm)
+            linestyle = "--" if curr_move.is_rapid else "-"
+            linewidth = 0.5 if curr_move.is_rapid else 1.5
+
+            ax.plot(
+                [prev_move.x, curr_move.x],
+                [prev_move.y, curr_move.y],
+                color=color, linestyle=linestyle, linewidth=linewidth, alpha=0.6
+            )
+
+        ax.set_aspect("equal")
+        ax.set_xlabel("X (mm)")
+        ax.set_ylabel("Y (mm)")
+        ax.set_title("Profiling Toolpath")
+        ax.grid(True, alpha=0.2, color="#555555")
+
+        self.fig.tight_layout(pad=2.0)
+        self.draw()
+
+    def plot_toolpaths_3d(self, moves):
+        """Plot profiling toolpaths in 3D."""
+        if not moves:
+            return
+
+        self.fig.clear()
+        ax = self.fig.add_subplot(111, projection="3d")
+        ax.set_facecolor("#2b2b2b")
+
+        z_values = [m.z for m in moves]
+        z_min, z_max = min(z_values), max(z_values)
+        z_range = z_max - z_min if z_max != z_min else 1.0
+
+        for i in range(1, len(moves)):
+            prev_move = moves[i - 1]
+            curr_move = moves[i]
+            z_norm = (curr_move.z - z_min) / z_range if z_range > 0 else 0.5
+
+            color = cm.coolwarm(z_norm)
+            linestyle = "--" if curr_move.is_rapid else "-"
+            linewidth = 0.5 if curr_move.is_rapid else 1.5
+
+            ax.plot(
+                [prev_move.x, curr_move.x],
+                [prev_move.y, curr_move.y],
+                [prev_move.z, curr_move.z],
+                color=color, linestyle=linestyle, linewidth=linewidth, alpha=0.6
+            )
+
+        ax.set_xlabel("X (mm)")
+        ax.set_ylabel("Y (mm)")
+        ax.set_zlabel("Z (mm)")
+        ax.set_title("3D Profiling Toolpath")
+
+        self.fig.tight_layout(pad=2.0)
+        self.draw()
+
+    def start_playback(self, moves, speed_multiplier=1):
+        """Start playback animation."""
+        self._moves = moves
+        self._playback_idx = 0
+        self._playback_speed_multiplier = speed_multiplier
+        self._is_playing = True
+        self._playback_timer.start(50)
+
+    def pause_playback(self):
+        self._is_playing = False
+        self._playback_timer.stop()
+
+    def reset_playback(self):
+        self._playback_timer.stop()
+        self._playback_idx = 0
+        self._is_playing = False
+        self._step_playback_frame()
+
+    def set_playback_speed(self, speed_multiplier):
+        self._playback_speed_multiplier = speed_multiplier
+
+    def _step_playback(self):
+        if not self._moves or self._playback_idx >= len(self._moves):
+            self._playback_timer.stop()
+            self._is_playing = False
+            return
+        self._step_playback_frame()
+        self._playback_idx += self._playback_speed_multiplier
+        if self._playback_idx >= len(self._moves):
+            self._playback_idx = len(self._moves) - 1
+            self._playback_timer.stop()
+            self._is_playing = False
+
+    def _step_playback_frame(self):
+        """Draw current playback frame."""
+        self._setup_axes()
+        ax = self.ax
+
+        if self._moves and len(self._moves) > 0:
+            cutting_x, cutting_y = [], []
+            rapid_x, rapid_y = [], []
+
+            for i in range(1, min(self._playback_idx, len(self._moves))):
+                prev = self._moves[i - 1]
+                curr = self._moves[i]
+                if curr.is_rapid:
+                    rapid_x.extend([prev.x, curr.x, None])
+                    rapid_y.extend([prev.y, curr.y, None])
+                else:
+                    cutting_x.extend([prev.x, curr.x, None])
+                    cutting_y.extend([prev.y, curr.y, None])
+
+            if cutting_x:
+                ax.plot(cutting_x, cutting_y, color="#60cc60", linewidth=1.5, alpha=0.7)
+            if rapid_x:
+                ax.plot(rapid_x, rapid_y, color="#ff8844", linewidth=1.5, linestyle="--", alpha=0.7)
+
+            if self._playback_idx < len(self._moves):
+                curr_move = self._moves[self._playback_idx]
+                circle = patches.Circle((curr_move.x, curr_move.y), 6, edgecolor="#ff0000", facecolor="none", linewidth=2)
+                ax.add_patch(circle)
+
+        ax.set_aspect("equal")
+        ax.set_xlabel("X (mm)")
+        ax.set_ylabel("Y (mm)")
+        if self._moves:
+            progress = int(100 * min(self._playback_idx, len(self._moves)) / len(self._moves))
+            status = "Playing" if self._is_playing else "Paused"
+            ax.set_title(f"Profiling Playback — {status} ({progress}%)")
+        ax.grid(True, alpha=0.2, color="#555555")
+
+        self.fig.tight_layout(pad=2.0)
+        self.draw()
+
+
+# ── Parameter panel ──────────────────────────────────────────────────────────
+
+class _FloatField(QLineEdit):
+    def __init__(self, default: float):
+        super().__init__(str(default))
+        self.setFixedWidth(90)
+
+    def value(self) -> float:
+        try:
+            return float(self.text())
+        except ValueError:
+            return 0.0
+
+
+class ProfileParameterPanel(QWidget):
+    def __init__(self):
+        super().__init__()
+        self._build_ui()
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setSpacing(6)
+
+        # ── Cutting parameters ────────────────────────────────────────────────
+        cut_group = QGroupBox("Cutting Parameters")
+        cut_lay = QFormLayout(cut_group)
+
+        self.f_tool_diameter = _FloatField(12.0)
+        self.f_spindle_speed = _FloatField(12000.0)
+        self.f_cutting_feed = _FloatField(800.0)
+        self.f_plunge_feed = _FloatField(200.0)
+        self.f_roughing_depth = _FloatField(2.0)
+        self.f_finishing_depth = _FloatField(0.5)
+        self.f_stepover = _FloatField(3.0)
+        self.f_clearance = _FloatField(10.0)
+        self.combo_direction = QComboBox()
+        self.combo_direction.addItems(["Along ski", "Across ski"])
+
+        cut_lay.addRow("Tool diameter (mm):", self.f_tool_diameter)
+        cut_lay.addRow("Spindle speed (RPM):", self.f_spindle_speed)
+        cut_lay.addRow("Cutting feed (mm/min):", self.f_cutting_feed)
+        cut_lay.addRow("Plunge feed (mm/min):", self.f_plunge_feed)
+        cut_lay.addRow("Roughing depth (mm):", self.f_roughing_depth)
+        cut_lay.addRow("Finishing depth (mm):", self.f_finishing_depth)
+        cut_lay.addRow("Stepover (mm):", self.f_stepover)
+        cut_lay.addRow("Clearance height (mm):", self.f_clearance)
+        cut_lay.addRow("Cut direction:", self.combo_direction)
+        root.addWidget(cut_group)
+
+        # ── Buttons ───────────────────────────────────────────────────────────
+        button_lay = QHBoxLayout()
+        self.btn_generate = QPushButton("Generate G-code")
+        self.btn_save_gcode = QPushButton("Save G-code…")
+        self.btn_load_params = QPushButton("Load params…")
+        self.btn_save_params = QPushButton("Save params…")
+
+        button_lay.addWidget(self.btn_load_params)
+        button_lay.addWidget(self.btn_save_params)
+        button_lay.addStretch()
+        button_lay.addWidget(self.btn_generate)
+        button_lay.addWidget(self.btn_save_gcode)
+        root.addLayout(button_lay)
+
+        self.lbl_status = QLabel("✓ Ready")
+        self.lbl_status.setStyleSheet("color: #60cc60;")
+        root.addWidget(self.lbl_status)
+
+        root.addStretch()
+
+    def get_params(self) -> ProfileParams:
+        return ProfileParams(
+            tool_diameter=self.f_tool_diameter.value(),
+            spindle_speed=int(self.f_spindle_speed.value()),
+            cutting_feed=self.f_cutting_feed.value(),
+            plunge_feed=self.f_plunge_feed.value(),
+            roughing_depth_per_pass=self.f_roughing_depth.value(),
+            finishing_depth_of_cut=self.f_finishing_depth.value(),
+            stepover=self.f_stepover.value(),
+            clearance_height=self.f_clearance.value(),
+            direction=self.combo_direction.currentText().lower().split()[0],
+        )
+
+    def set_params(self, p: ProfileParams):
+        self.f_tool_diameter.setText(str(p.tool_diameter))
+        self.f_spindle_speed.setText(str(p.spindle_speed))
+        self.f_cutting_feed.setText(str(p.cutting_feed))
+        self.f_plunge_feed.setText(str(p.plunge_feed))
+        self.f_roughing_depth.setText(str(p.roughing_depth_per_pass))
+        self.f_finishing_depth.setText(str(p.finishing_depth_of_cut))
+        self.f_stepover.setText(str(p.stepover))
+        self.f_clearance.setText(str(p.clearance_height))
+
+
+# ── Tab widget ────────────────────────────────────────────────────────────────
+
+class ProfileTab(QWidget):
+    def __init__(self, geom: SkiGeometry, params, blank_tab):
+        super().__init__()
+        self.geom = geom
+        self.params = params
+        self.blank_tab = blank_tab
+        self._gcode_string = None
+        self._moves = None
+        self._build_ui()
+        self._connect_signals()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(4, 4, 4, 4)
+
+        splitter = QSplitter(Qt.Vertical)
+
+        # Top: canvas with playback controls
+        canvas_layout = QVBoxLayout()
+        self.canvas = ProfileCanvas()
+        canvas_layout.addWidget(self.canvas)
+
+        playback_lay = QHBoxLayout()
+        self.btn_play_pause = QPushButton("▶ Play")
+        self.btn_reset = QPushButton("⏮ Reset")
+        self.btn_speed_down = QPushButton("◀ Speed")
+        self.lbl_speed = QLabel("1×")
+        self.lbl_speed.setFixedWidth(50)
+        self.btn_speed_up = QPushButton("Speed ▶")
+        self.btn_toggle_3d = QPushButton("3D View")
+
+        playback_lay.addWidget(self.btn_play_pause)
+        playback_lay.addWidget(self.btn_reset)
+        playback_lay.addWidget(self.btn_speed_down)
+        playback_lay.addWidget(self.lbl_speed)
+        playback_lay.addWidget(self.btn_speed_up)
+        playback_lay.addStretch()
+        playback_lay.addWidget(self.btn_toggle_3d)
+        canvas_layout.addLayout(playback_lay)
+
+        canvas_widget = QWidget()
+        canvas_widget.setLayout(canvas_layout)
+        splitter.addWidget(canvas_widget)
+
+        # Bottom: parameter panel
+        self.panel = ProfileParameterPanel()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.panel)
+        splitter.addWidget(scroll)
+
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 2)
+
+        layout.addWidget(splitter)
+
+    def _connect_signals(self):
+        self.panel.btn_generate.clicked.connect(self._generate_gcode)
+        self.panel.btn_save_gcode.clicked.connect(self._save_gcode)
+        self.panel.btn_load_params.clicked.connect(self._load_params)
+        self.panel.btn_save_params.clicked.connect(self._save_params)
+
+        self.btn_play_pause.clicked.connect(self._playback_toggle)
+        self.btn_reset.clicked.connect(self._playback_reset)
+        self.btn_speed_down.clicked.connect(self._playback_speed_down)
+        self.btn_speed_up.clicked.connect(self._playback_speed_up)
+        self.btn_toggle_3d.clicked.connect(self._toggle_3d_view)
+
+    def _generate_gcode(self):
+        """Generate profiling G-code."""
+        try:
+            blank = self.blank_tab.panel.get_blank()
+            profile_params = self.panel.get_params()
+
+            self._gcode_string, self._moves = generate_profile_gcode(
+                self.geom, self.params, blank, profile_params
+            )
+
+            self.canvas._moves = self._moves
+            self.canvas._playback_idx = 0
+            self.canvas._step_playback_frame()
+            self.lbl_speed.setText("1×")
+
+            self.panel.lbl_status.setText(f"✓ G-code generated ({len(self._moves)} moves)")
+            self.panel.lbl_status.setStyleSheet("color: #60cc60;")
+        except Exception as e:
+            self.panel.lbl_status.setText(f"✗ Error: {str(e)}")
+            self.panel.lbl_status.setStyleSheet("color: #ff6060;")
+
+    def _save_gcode(self):
+        """Save G-code to file."""
+        if not self._gcode_string:
+            QMessageBox.warning(self, "No G-code", "Generate G-code first")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save G-code", "profile.nc",
+            "G-code Files (*.nc *.gcode);;All Files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w") as f:
+                f.write(self._gcode_string)
+            QMessageBox.information(self, "Saved", f"G-code saved to {Path(path).name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", str(e))
+
+    def _load_params(self):
+        """Load params from JSON."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Parameters", "", "JSON Files (*.json);;All Files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            params = ProfileParams.from_json(path)
+            self.panel.set_params(params)
+        except Exception as e:
+            QMessageBox.critical(self, "Load Error", str(e))
+
+    def _save_params(self):
+        """Save params to JSON."""
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Parameters", "profile_params.json",
+            "JSON Files (*.json);;All Files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            self.panel.get_params().to_json(path)
+            QMessageBox.information(self, "Saved", f"Parameters saved to {Path(path).name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", str(e))
+
+    def _playback_toggle(self):
+        if not self._moves:
+            QMessageBox.warning(self, "No G-code", "Generate G-code first")
+            return
+
+        if self.canvas._is_playing:
+            self.canvas.pause_playback()
+            self.btn_play_pause.setText("▶ Play")
+        else:
+            self.canvas.start_playback(self._moves, self.canvas._playback_speed_multiplier)
+            self.btn_play_pause.setText("⏸ Pause")
+
+    def _playback_reset(self):
+        self.canvas.reset_playback()
+        self.canvas._playback_speed_multiplier = 1
+        self.lbl_speed.setText("1×")
+        self.btn_play_pause.setText("▶ Play")
+
+    def _playback_speed_down(self):
+        speeds = [1, 2, 4, 8, 16]
+        current = self.canvas._playback_speed_multiplier
+        idx = speeds.index(current) if current in speeds else len(speeds) - 1
+        new_speed = speeds[max(0, idx - 1)]
+        self.canvas.set_playback_speed(new_speed)
+        self.lbl_speed.setText(f"{new_speed}×")
+
+    def _playback_speed_up(self):
+        speeds = [1, 2, 4, 8, 16]
+        current = self.canvas._playback_speed_multiplier
+        idx = speeds.index(current) if current in speeds else 0
+        new_speed = speeds[min(len(speeds) - 1, idx + 1)]
+        self.canvas.set_playback_speed(new_speed)
+        self.lbl_speed.setText(f"{new_speed}×")
+
+    def _toggle_3d_view(self):
+        if not self._moves:
+            QMessageBox.warning(self, "No G-code", "Generate G-code first")
+            return
+
+        self.canvas._use_3d = not self.canvas._use_3d
+        self.btn_toggle_3d.setText("2D View" if self.canvas._use_3d else "3D View")
+
+        if self.canvas._use_3d:
+            self.canvas.plot_toolpaths_3d(self._moves)
+        else:
+            self.canvas.plot_toolpaths(self._moves)
