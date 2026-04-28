@@ -242,21 +242,21 @@ class BaseTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        splitter = QSplitter(Qt.Vertical)
+        self.splitter = QSplitter(Qt.Vertical)
 
         self.canvas = BaseCanvas()
-        splitter.addWidget(self.canvas)
+        self.splitter.addWidget(self.canvas)
 
         self.panel = BaseParameterPanel()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.panel)
-        splitter.addWidget(scroll)
+        self.splitter.addWidget(scroll)
 
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(0, 2)
+        self.splitter.setStretchFactor(1, 1)
 
-        layout.addWidget(splitter)
+        layout.addWidget(self.splitter)
 
     def _connect_signals(self):
         self.panel.f_edge_width.textChanged.connect(self._update_preview)

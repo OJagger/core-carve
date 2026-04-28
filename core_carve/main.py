@@ -1,7 +1,7 @@
 import json
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QFileDialog, QMessageBox
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QObject
 
 from core_carve.tab_design import DesignTab
 from core_carve.tab_base import BaseTab
@@ -41,6 +41,18 @@ class MainWindow(QMainWindow):
         self.gcode_tab = None
         self.profile_tab = None
 
+        # Splitters whose vis-pane size is kept in sync across all tabs
+        self._viz_splitters = [
+            self.design_tab.splitter if hasattr(self.design_tab, "splitter") else None,
+            self.base_tab.splitter,
+            self.geometry_tab.splitter,
+            self.camber_tab.splitter,
+        ]
+        self._viz_splitters = [s for s in self._viz_splitters if s is not None]
+        self._syncing_splitters = False
+        for s in self._viz_splitters:
+            s.splitterMoved.connect(self._sync_splitters)
+
         # Wire geometry tab "Save ski" to combined save (includes planform params)
         self.geometry_tab.panel.btn_save_json.clicked.disconnect(
             self.geometry_tab._save_json
@@ -49,6 +61,27 @@ class MainWindow(QMainWindow):
 
         # Connect to geometry updates
         self.tabs.currentChanged.connect(self._check_geometry_loaded)
+
+    def _sync_splitters(self, pos: int, index: int):
+        """Keep all viz-pane splitters at the same fractional position."""
+        if self._syncing_splitters:
+            return
+        sender = self.sender()
+        sizes = sender.sizes()
+        total = sum(sizes)
+        if total == 0:
+            return
+        ratio = sizes[0] / total
+        self._syncing_splitters = True
+        try:
+            for s in self._viz_splitters:
+                if s is sender:
+                    continue
+                t = sum(s.sizes())
+                if t > 0:
+                    s.setSizes([int(ratio * t), t - int(ratio * t)])
+        finally:
+            self._syncing_splitters = False
 
     def _save_ski_file(self):
         """Save all ski params (planform + core) to one JSON file."""
@@ -158,6 +191,22 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(self.gcode_tab, "Sidewall slot machining")
             self.profile_tab = ProfileTab(self.geometry_tab._geom, params, self.blank_tab)
             self.tabs.addTab(self.profile_tab, "Core profiling")
+            # Register late-created splitters and sync them to the current ratio
+            for new_tab in (self.blank_tab, self.gcode_tab, self.profile_tab):
+                s = new_tab.splitter
+                self._viz_splitters.append(s)
+                s.splitterMoved.connect(self._sync_splitters)
+            # Apply current ratio from first splitter
+            if self._viz_splitters:
+                ref = self._viz_splitters[0]
+                ref_sizes = ref.sizes()
+                ref_total = sum(ref_sizes)
+                if ref_total > 0:
+                    ratio = ref_sizes[0] / ref_total
+                    for s in (self.blank_tab.splitter, self.gcode_tab.splitter, self.profile_tab.splitter):
+                        t = sum(s.sizes())
+                        if t > 0:
+                            s.setSizes([int(ratio * t), t - int(ratio * t)])
         else:
             self.blank_tab.geom = self.geometry_tab._geom
             self.blank_tab.params = params

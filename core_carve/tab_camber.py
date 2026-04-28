@@ -259,21 +259,21 @@ class CamberTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        splitter = QSplitter(Qt.Vertical)
+        self.splitter = QSplitter(Qt.Vertical)
 
         self.canvas = CamberCanvas(self)
-        splitter.addWidget(self.canvas)
+        self.splitter.addWidget(self.canvas)
 
         self.panel = CamberParameterPanel()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.panel)
-        splitter.addWidget(scroll)
+        self.splitter.addWidget(scroll)
 
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(0, 2)
+        self.splitter.setStretchFactor(1, 1)
 
-        layout.addWidget(splitter)
+        layout.addWidget(self.splitter)
 
     def _connect_signals(self):
         for field in (

@@ -549,7 +549,7 @@ class GcodeTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        splitter = QSplitter(Qt.Vertical)
+        self.splitter = QSplitter(Qt.Vertical)
 
         # Top: canvas with playback controls
         canvas_layout = QVBoxLayout()
@@ -577,19 +577,19 @@ class GcodeTab(QWidget):
 
         canvas_widget = QWidget()
         canvas_widget.setLayout(canvas_layout)
-        splitter.addWidget(canvas_widget)
+        self.splitter.addWidget(canvas_widget)
 
         # Bottom: parameter panel
         self.panel = SlotParameterPanel()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.panel)
-        splitter.addWidget(scroll)
+        self.splitter.addWidget(scroll)
 
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(0, 3)
+        self.splitter.setStretchFactor(1, 1)
 
-        layout.addWidget(splitter)
+        layout.addWidget(self.splitter)
 
     def _connect_signals(self):
         # Parameters → preview

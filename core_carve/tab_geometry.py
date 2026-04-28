@@ -295,23 +295,23 @@ class GeometryTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
 
-        splitter = QSplitter(Qt.Vertical)
+        self.splitter = QSplitter(Qt.Vertical)
 
         # Top: visualisation canvas
         self.canvas = SkiCanvas()
-        splitter.addWidget(self.canvas)
+        self.splitter.addWidget(self.canvas)
 
         # Bottom: parameter panel in a scroll area
         self.panel = ParameterPanel()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.panel)
-        splitter.addWidget(scroll)
+        self.splitter.addWidget(scroll)
 
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 2)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 2)
 
-        layout.addWidget(splitter)
+        layout.addWidget(self.splitter)
 
     def _connect_signals(self):
         self.panel.btn_load_dxf.clicked.connect(self._load_dxf)
