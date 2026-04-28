@@ -1,4 +1,4 @@
-"""Tab — Base Design: metal edge layout and DXF export."""
+"""Tab — Base Design: metal edge layout, step cutouts, and G-code export."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,14 +7,13 @@ import numpy as np
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QLineEdit, QGroupBox, QFormLayout,
-    QMessageBox, QScrollArea, QSizePolicy, QFileDialog,
+    QMessageBox, QScrollArea, QSizePolicy, QFileDialog, QComboBox,
 )
 from PyQt5.QtCore import Qt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-import matplotlib.patches as patches
 
-from core_carve.base_design import BaseParams, compute_edge_cutouts, export_base_dxf
+from core_carve.base_design import BaseParams, compute_base_outline, export_base_dxf, compute_base_gcode
 
 
 # ── Canvas ────────────────────────────────────────────────────────────────────
@@ -41,65 +40,44 @@ class BaseCanvas(FigureCanvas):
         self.draw()
 
     def plot_base_outline(self, outline, params):
-        """Plot ski outline with edge cutout regions (horizontal ski view, top-down)."""
+        """Plot the base outline polygon with edge step cutouts (horizontal top-down view)."""
         self._setup_axes()
         ax = self.ax
 
         if outline is None or len(outline) == 0:
             ax.text(0.5, 0.5, "Load outline from Outline Design tab",
-                   ha="center", va="center", transform=ax.transAxes, color="#999")
+                    ha="center", va="center", transform=ax.transAxes, color="#999")
             self.fig.tight_layout(pad=2.0)
             self.draw()
             return
 
-        # Ski is displayed horizontally: X=along ski, Y=across ski (swapped from outline coords)
-        # outline is (x, y) where x=across, y=along
-        # So we plot with Y as X-axis and X as Y-axis to show horizontal view
+        # Ski displayed horizontally: X-axis = along ski (outline Y), Y-axis = across ski (outline X)
+        # Draw ski outline (reference, dashed)
+        ax.plot(outline[:, 1], outline[:, 0], color="#4488ff", linewidth=1,
+                linestyle="--", alpha=0.4, label="Ski outline")
 
-        # Get edge cutout regions
-        left_edge, right_edge = compute_edge_cutouts(outline, params)
+        # Compute and draw the base outline with edge step cutouts
+        base_poly = compute_base_outline(outline, params)
+        if len(base_poly) > 0:
+            # Close the polygon for plotting
+            poly_closed = np.vstack([base_poly, base_poly[0]])
+            ax.plot(poly_closed[:, 1], poly_closed[:, 0], color="#80c0ff",
+                    linewidth=2.0, label="Base outline")
 
-        # Draw overall ski outline in dashed lines (light color, behind)
-        ax.plot(outline[:, 1], outline[:, 0], color="#4488ff", linewidth=1.5, linestyle="--", alpha=0.4, label="Ski outline")
-
-        # Draw base outline (solid blue lines)
-        ax.plot(outline[:, 1], outline[:, 0], color="#80c0ff", linewidth=2.5, label="Base outline")
-
-        # Get y range (along ski)
         y_min, y_max = outline[:, 1].min(), outline[:, 1].max()
-        tip_line_y = y_min + params.tip_offset
-        tail_line_y = y_max - params.tail_offset
-
-        # Overlay dashed lines in cutout regions (left edge)
-        if len(left_edge) > 0:
-            # Find indices where cutout applies
-            mask = (left_edge[:, 1] >= tip_line_y) & (left_edge[:, 1] <= tail_line_y)
-            if np.any(mask):
-                cutout_y = left_edge[mask, 1]
-                left_outline_at_y = np.interp(cutout_y, outline[:, 1], outline[:, 0])
-                ax.plot(cutout_y, left_outline_at_y, color="#4488ff", linewidth=1, linestyle="--", alpha=0.5)
-
-        # Overlay dashed lines in cutout regions (right edge)
-        if len(right_edge) > 0:
-            mask = (right_edge[:, 1] >= tip_line_y) & (right_edge[:, 1] <= tail_line_y)
-            if np.any(mask):
-                cutout_y = right_edge[mask, 1]
-                right_outline_at_y = np.interp(cutout_y, outline[:, 1], outline[:, 0])
-                ax.plot(cutout_y, right_outline_at_y, color="#4488ff", linewidth=1, linestyle="--", alpha=0.5)
-
-        # Mark tip and tail offset lines (dashed vertical lines in horizontal view)
-        ax.axvline(x=tip_line_y, color="#ffaa00", linestyle="--", linewidth=1, alpha=0.5, label="Tip offset")
-        ax.axvline(x=tail_line_y, color="#ffaa00", linestyle="--", linewidth=1, alpha=0.5, label="Tail offset")
+        edge_start_y = y_min + params.tip_offset
+        edge_end_y = y_max - params.tail_offset
+        ax.axvline(x=edge_start_y, color="#ffaa00", linestyle="--", linewidth=1,
+                   alpha=0.5, label="Edge start/end")
+        ax.axvline(x=edge_end_y, color="#ffaa00", linestyle="--", linewidth=1, alpha=0.5)
 
         ax.set_aspect("equal")
         ax.set_xlabel("Along ski (mm)")
         ax.set_ylabel("Across ski (mm)")
-        ax.set_title("Base Design with Edge Cutouts (Top View)")
+        ax.set_title("Base Design with Edge Step Cutouts (Top View)")
         ax.grid(True, alpha=0.2, color="#555555")
-
-        # Move legend below the plot
         ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.12), ncol=3,
-                 facecolor="#333333", labelcolor="#dddddd")
+                  facecolor="#333333", labelcolor="#dddddd")
 
         self.fig.tight_layout(pad=2.0)
         self.draw()
@@ -136,9 +114,9 @@ class BaseParameterPanel(QWidget):
         self.f_tip_offset = _FloatField(100.0)
         self.f_tail_offset = _FloatField(100.0)
 
-        edge_lay.addRow("Edge width (mm):", self.f_edge_width)
-        edge_lay.addRow("Tip offset (mm):", self.f_tip_offset)
-        edge_lay.addRow("Tail offset (mm):", self.f_tail_offset)
+        edge_lay.addRow("Edge groove width (mm):", self.f_edge_width)
+        edge_lay.addRow("Tip edge offset (mm):", self.f_tip_offset)
+        edge_lay.addRow("Tail edge offset (mm):", self.f_tail_offset)
         root.addWidget(edge_group)
 
         # ── Base material ────────────────────────────────────────────────────
@@ -154,16 +132,50 @@ class BaseParameterPanel(QWidget):
         base_lay.addRow("Base thickness (mm):", self.f_base_thickness)
         root.addWidget(base_group)
 
+        # ── Cutting tool ─────────────────────────────────────────────────────
+        tool_group = QGroupBox("Cutting Tool")
+        tool_lay = QFormLayout(tool_group)
+
+        self.combo_cutter = QComboBox()
+        self.combo_cutter.addItems(["Router", "Drag knife"])
+        self.f_cutting_feed = _FloatField(2000.0)
+
+        # Router-specific
+        self.f_tool_diameter = _FloatField(6.0)
+        self.f_spindle_speed = _FloatField(18000.0)
+        self.f_plunge_feed = _FloatField(300.0)
+        self.f_clearance = _FloatField(10.0)
+
+        # Drag knife-specific
+        self.f_kerf_width = _FloatField(0.5)
+
+        tool_lay.addRow("Cutter type:", self.combo_cutter)
+        tool_lay.addRow("Cutting feed (mm/min):", self.f_cutting_feed)
+        tool_lay.addRow("Tool diameter (mm):", self.f_tool_diameter)
+        tool_lay.addRow("Spindle speed (RPM):", self.f_spindle_speed)
+        tool_lay.addRow("Plunge feed (mm/min):", self.f_plunge_feed)
+        tool_lay.addRow("Clearance height (mm):", self.f_clearance)
+        tool_lay.addRow("Kerf width (mm):", self.f_kerf_width)
+        root.addWidget(tool_group)
+
+        # Show/hide router vs drag-knife fields
+        self.combo_cutter.currentTextChanged.connect(self._on_cutter_changed)
+        self._on_cutter_changed("Router")
+
         # ── Buttons ──────────────────────────────────────────────────────────
         button_lay = QHBoxLayout()
-        self.btn_export_dxf = QPushButton("Export DXF…")
         self.btn_load_params = QPushButton("Load params…")
         self.btn_save_params = QPushButton("Save params…")
+        self.btn_export_dxf = QPushButton("Export DXF…")
+        self.btn_generate_gcode = QPushButton("Generate G-code")
+        self.btn_save_gcode = QPushButton("Save G-code…")
 
         button_lay.addWidget(self.btn_load_params)
         button_lay.addWidget(self.btn_save_params)
         button_lay.addStretch()
         button_lay.addWidget(self.btn_export_dxf)
+        button_lay.addWidget(self.btn_generate_gcode)
+        button_lay.addWidget(self.btn_save_gcode)
         root.addLayout(button_lay)
 
         self.lbl_status = QLabel("✓ Ready")
@@ -172,7 +184,16 @@ class BaseParameterPanel(QWidget):
 
         root.addStretch()
 
+    def _on_cutter_changed(self, text: str):
+        is_router = text == "Router"
+        self.f_tool_diameter.setEnabled(is_router)
+        self.f_spindle_speed.setEnabled(is_router)
+        self.f_plunge_feed.setEnabled(is_router)
+        self.f_clearance.setEnabled(is_router)
+        self.f_kerf_width.setEnabled(not is_router)
+
     def get_params(self) -> BaseParams:
+        cutter = "router" if self.combo_cutter.currentText() == "Router" else "drag_knife"
         return BaseParams(
             edge_width=self.f_edge_width.value(),
             tip_offset=self.f_tip_offset.value(),
@@ -180,6 +201,14 @@ class BaseParameterPanel(QWidget):
             base_length=self.f_base_length.value(),
             base_width=self.f_base_width.value(),
             base_thickness=self.f_base_thickness.value(),
+            cutter_type=cutter,
+            tool_diameter=self.f_tool_diameter.value(),
+            spindle_speed=self.f_spindle_speed.value(),
+            cutting_feed=self.f_cutting_feed.value(),
+            plunge_feed=self.f_plunge_feed.value(),
+            clearance_height=self.f_clearance.value(),
+            kerf_width=self.f_kerf_width.value(),
+            cutting_speed=self.f_cutting_feed.value(),
         )
 
     def set_params(self, p: BaseParams):
@@ -189,6 +218,14 @@ class BaseParameterPanel(QWidget):
         self.f_base_length.setText(str(p.base_length))
         self.f_base_width.setText(str(p.base_width))
         self.f_base_thickness.setText(str(p.base_thickness))
+        cutter_text = "Router" if p.cutter_type == "router" else "Drag knife"
+        self.combo_cutter.setCurrentText(cutter_text)
+        self.f_tool_diameter.setText(str(p.tool_diameter))
+        self.f_spindle_speed.setText(str(p.spindle_speed))
+        self.f_cutting_feed.setText(str(p.cutting_feed))
+        self.f_plunge_feed.setText(str(p.plunge_feed))
+        self.f_clearance.setText(str(p.clearance_height))
+        self.f_kerf_width.setText(str(p.kerf_width))
 
 
 # ── Tab widget ────────────────────────────────────────────────────────────────
@@ -197,6 +234,7 @@ class BaseTab(QWidget):
     def __init__(self):
         super().__init__()
         self._outline = None
+        self._gcode_string = None
         self._build_ui()
         self._connect_signals()
 
@@ -206,51 +244,46 @@ class BaseTab(QWidget):
 
         splitter = QSplitter(Qt.Vertical)
 
-        # Top: canvas
         self.canvas = BaseCanvas()
         splitter.addWidget(self.canvas)
 
-        # Bottom: parameter panel
         self.panel = BaseParameterPanel()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.panel)
         splitter.addWidget(scroll)
 
-        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(0, 2)
         splitter.setStretchFactor(1, 1)
 
         layout.addWidget(splitter)
 
     def _connect_signals(self):
-        # Parameters → preview
         self.panel.f_edge_width.textChanged.connect(self._update_preview)
         self.panel.f_tip_offset.textChanged.connect(self._update_preview)
         self.panel.f_tail_offset.textChanged.connect(self._update_preview)
 
-        # Buttons
         self.panel.btn_export_dxf.clicked.connect(self._export_dxf)
         self.panel.btn_load_params.clicked.connect(self._load_params)
         self.panel.btn_save_params.clicked.connect(self._save_params)
+        self.panel.btn_generate_gcode.clicked.connect(self._generate_gcode)
+        self.panel.btn_save_gcode.clicked.connect(self._save_gcode)
 
     def set_outline(self, outline):
-        """Receive outline from Outline Design tab."""
         self._outline = outline
         self._update_preview()
 
     def _update_preview(self):
-        """Redraw the base design preview."""
         try:
             params = self.panel.get_params()
             self.canvas.plot_base_outline(self._outline, params)
-            self.panel.lbl_status.setText("✓ Ready to export")
+            self.panel.lbl_status.setText("✓ Ready")
             self.panel.lbl_status.setStyleSheet("color: #60cc60;")
         except Exception as e:
             self.panel.lbl_status.setText(f"✗ Error: {str(e)}")
             self.panel.lbl_status.setStyleSheet("color: #ff6060;")
 
     def _export_dxf(self):
-        """Export base outline to DXF."""
         if self._outline is None or len(self._outline) == 0:
             QMessageBox.warning(self, "No outline", "Load outline from Outline Design tab first")
             return
@@ -265,12 +298,45 @@ class BaseTab(QWidget):
         try:
             params = self.panel.get_params()
             export_base_dxf(self._outline, params, path)
-            QMessageBox.information(self, "Exported", f"Base design exported to {Path(path).name}")
+            QMessageBox.information(self, "Exported", f"Base outline exported to {Path(path).name}")
         except Exception as e:
             QMessageBox.critical(self, "Export Error", str(e))
 
+    def _generate_gcode(self):
+        if self._outline is None or len(self._outline) == 0:
+            QMessageBox.warning(self, "No outline", "Load outline from Outline Design tab first")
+            return
+
+        try:
+            params = self.panel.get_params()
+            self._gcode_string = compute_base_gcode(self._outline, params)
+            n_lines = self._gcode_string.count("\n") + 1
+            self.panel.lbl_status.setText(f"✓ G-code generated ({n_lines} lines)")
+            self.panel.lbl_status.setStyleSheet("color: #60cc60;")
+        except Exception as e:
+            self.panel.lbl_status.setText(f"✗ Error: {str(e)}")
+            self.panel.lbl_status.setStyleSheet("color: #ff6060;")
+
+    def _save_gcode(self):
+        if not self._gcode_string:
+            QMessageBox.warning(self, "No G-code", "Generate G-code first")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save G-code", "base.nc",
+            "G-code Files (*.nc *.gcode);;All Files (*)"
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w") as f:
+                f.write(self._gcode_string)
+            QMessageBox.information(self, "Saved", f"G-code saved to {Path(path).name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Save Error", str(e))
+
     def _load_params(self):
-        """Load base params from JSON."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Load Parameters", "", "JSON Files (*.json);;All Files (*)"
         )
@@ -285,7 +351,6 @@ class BaseTab(QWidget):
             QMessageBox.critical(self, "Load Error", str(e))
 
     def _save_params(self):
-        """Save base params to JSON."""
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Parameters", "base_params.json",
             "JSON Files (*.json);;All Files (*)"
