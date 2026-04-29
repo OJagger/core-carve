@@ -391,17 +391,27 @@ class GcodeCanvas(FigureCanvas):
         self._enable_3d_mouse_controls(ax)
 
     def _enable_3d_mouse_controls(self, ax):
-        """Add mouse controls to 3D plot for rotation and zoom."""
+        """Add mouse controls to 3D plot for rotation, zoom, and pan."""
         self._3d_press = None
         self._3d_xpress = None
         self._3d_ypress = None
+        self._3d_pan_xlim = None
+        self._3d_pan_ylim = None
+        self._3d_pan_px = None
+        self._3d_pan_py = None
 
         def on_press(event):
             if event.inaxes != ax:
                 return
             self._3d_press = (event.button, event.xdata, event.ydata)
-            self._3d_xpress = ax.view_init()[1]
-            self._3d_ypress = ax.view_init()[0]
+            if event.button == 3:
+                self._3d_xpress = ax.azim
+                self._3d_ypress = ax.elev
+            elif event.button == 2:
+                self._3d_pan_xlim = ax.get_xlim()
+                self._3d_pan_ylim = ax.get_ylim()
+                self._3d_pan_px = event.x
+                self._3d_pan_py = event.y
 
         def on_release(event):
             self._3d_press = None
@@ -410,10 +420,23 @@ class GcodeCanvas(FigureCanvas):
             if self._3d_press is None or event.inaxes != ax:
                 return
             button, xpress, ypress = self._3d_press
-            if button == 3:  # Right mouse button for rotation
+            if button == 3:  # Right mouse: rotate
                 dx = event.xdata - xpress if event.xdata else 0
                 dy = event.ydata - ypress if event.ydata else 0
                 ax.view_init(elev=self._3d_ypress + dy, azim=self._3d_xpress + dx)
+                self.draw()
+            elif button == 2 and self._3d_pan_xlim is not None:  # Middle mouse: pan
+                dx = event.x - self._3d_pan_px
+                dy = event.y - self._3d_pan_py
+                xlim = self._3d_pan_xlim
+                ylim = self._3d_pan_ylim
+                xrng = xlim[1] - xlim[0]
+                yrng = ylim[1] - ylim[0]
+                w, h = self.get_width_height()
+                scale_x = xrng / w if w > 0 else 1.0
+                scale_y = yrng / h if h > 0 else 1.0
+                ax.set_xlim([xlim[0] - dx * scale_x, xlim[1] - dx * scale_x])
+                ax.set_ylim([ylim[0] + dy * scale_y, ylim[1] + dy * scale_y])
                 self.draw()
 
         def on_scroll(event):

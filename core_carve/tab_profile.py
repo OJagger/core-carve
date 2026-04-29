@@ -189,6 +189,88 @@ class ProfileCanvas(FigureCanvas):
 
         self.fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
         self.draw()
+        self._enable_3d_mouse_controls(ax)
+
+    def _enable_3d_mouse_controls(self, ax):
+        """Add mouse controls to 3D plot for rotation, zoom, and pan."""
+        self._3d_press = None
+        self._3d_xpress = None
+        self._3d_ypress = None
+        self._3d_pan_xlim = None
+        self._3d_pan_ylim = None
+        self._3d_pan_px = None
+        self._3d_pan_py = None
+
+        def on_press(event):
+            if event.inaxes != ax:
+                return
+            self._3d_press = (event.button, event.xdata, event.ydata)
+            if event.button == 3:
+                self._3d_xpress = ax.azim
+                self._3d_ypress = ax.elev
+            elif event.button == 2:
+                self._3d_pan_xlim = ax.get_xlim()
+                self._3d_pan_ylim = ax.get_ylim()
+                self._3d_pan_px = event.x
+                self._3d_pan_py = event.y
+
+        def on_release(event):
+            self._3d_press = None
+
+        def on_motion(event):
+            if self._3d_press is None or event.inaxes != ax:
+                return
+            button, xpress, ypress = self._3d_press
+            if button == 3:  # Right mouse: rotate
+                dx = event.xdata - xpress if event.xdata else 0
+                dy = event.ydata - ypress if event.ydata else 0
+                ax.view_init(elev=self._3d_ypress + dy, azim=self._3d_xpress + dx)
+                self.draw()
+            elif button == 2 and self._3d_pan_xlim is not None:  # Middle mouse: pan
+                dx = event.x - self._3d_pan_px
+                dy = event.y - self._3d_pan_py
+                xlim = self._3d_pan_xlim
+                ylim = self._3d_pan_ylim
+                xrng = xlim[1] - xlim[0]
+                yrng = ylim[1] - ylim[0]
+                w, h = self.get_width_height()
+                scale_x = xrng / w if w > 0 else 1.0
+                scale_y = yrng / h if h > 0 else 1.0
+                ax.set_xlim([xlim[0] - dx * scale_x, xlim[1] - dx * scale_x])
+                ax.set_ylim([ylim[0] + dy * scale_y, ylim[1] + dy * scale_y])
+                self.draw()
+
+        def on_scroll(event):
+            if event.inaxes != ax:
+                return
+            cur_xlim = ax.get_xlim()
+            cur_ylim = ax.get_ylim()
+            cur_zlim = ax.get_zlim()
+            xdata = event.xdata
+            ydata = event.ydata
+            if event.button == "up":
+                scale_factor = 0.8
+            elif event.button == "down":
+                scale_factor = 1.2
+            else:
+                return
+            new_width = (cur_xlim[1] - cur_xlim[0]) * scale_factor
+            new_height = (cur_ylim[1] - cur_ylim[0]) * scale_factor
+            new_depth = (cur_zlim[1] - cur_zlim[0]) * scale_factor
+            relx = (cur_xlim[1] - xdata) / (cur_xlim[1] - cur_xlim[0]) if xdata and (cur_xlim[1] - cur_xlim[0]) != 0 else 0.5
+            rely = (cur_ylim[1] - ydata) / (cur_ylim[1] - cur_ylim[0]) if ydata and (cur_ylim[1] - cur_ylim[0]) != 0 else 0.5
+            ax.set_xlim([xdata - new_width * (1 - relx), xdata + new_width * relx] if xdata else
+                        [(cur_xlim[0] + cur_xlim[1]) / 2 - new_width / 2, (cur_xlim[0] + cur_xlim[1]) / 2 + new_width / 2])
+            ax.set_ylim([ydata - new_height * (1 - rely), ydata + new_height * rely] if ydata else
+                        [(cur_ylim[0] + cur_ylim[1]) / 2 - new_height / 2, (cur_ylim[0] + cur_ylim[1]) / 2 + new_height / 2])
+            ax.set_zlim([(cur_zlim[0] + cur_zlim[1]) / 2 - new_depth / 2,
+                         (cur_zlim[0] + cur_zlim[1]) / 2 + new_depth / 2])
+            self.draw()
+
+        self.mpl_connect("button_press_event", on_press)
+        self.mpl_connect("button_release_event", on_release)
+        self.mpl_connect("motion_notify_event", on_motion)
+        self.mpl_connect("scroll_event", on_scroll)
 
     def start_playback(self, moves, speed_multiplier=1):
         """Start playback animation."""
