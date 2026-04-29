@@ -48,29 +48,34 @@ class CamberCanvas(FigureCanvas):
 
     # ── Drag logic ────────────────────────────────────────────────────────────
 
-    # Draggable control point names and the field they update
-    # (target_name, panel_field_name, axis: 'y' or 'z')
-    _DRAG_TARGETS = [
-        ("seg1_p1", "f_tip_apex_arm", "y"),    # P1 of tip rocker
-        ("seg1_p2", "f_tip_junc_arm", "y"),    # P2 of tip rocker (arm from junction)
-        ("seg1_p3", "f_tip_length", "y"),       # junction (tip_rocker_length)
-        ("seg2_p1", "f_camber_arm", "y"),       # P1 of camber rise
-        ("seg2_p3", "f_camber_amount", "z"),    # camber peak
-        ("seg3_p3", "f_tail_length", "y"),      # tail junction
-        ("seg4_p1", "f_tail_junc_arm", "y"),    # P1 of tail rocker
-        ("seg4_p2", "f_tail_apex_arm", "y"),    # P2 of tail rocker
-    ]
+    # Draggable point names (all handled explicitly in _on_motion)
+    _DRAGGABLE = {
+        "seg1_p1",   # tip apex arm — both y and z
+        "seg1_p2",   # tip junction arm — y only
+        "seg1_p3",   # tip junction position — y only
+        "seg2_p1",   # camber rise arm from junction — y only
+        "seg2_p2",   # camber peak arm (rise side) — y only
+        "seg2_p3",   # camber peak — z only
+        "seg3_p1",   # camber peak arm (fall side) — y only
+        "seg3_p3",   # tail junction position — y only
+        "seg4_p1",   # tail junction arm — y only
+        "seg4_p2",   # tail apex arm — both y and z
+    }
 
     def _on_press(self, event):
         if event.inaxes != self.ax or self._params is None or event.xdata is None:
             return
         cps = bezier_control_points(self._ski_length, self._params)
-        threshold = self._ski_length * 0.03
+        z_scale = max(self._params.tip_rocker_height, self._params.tail_rocker_height,
+                      self._params.camber_amount, 1.0)
+        threshold = 0.04  # normalised distance threshold
         best, best_dist = None, threshold
-        for name, _field, _axis in self._DRAG_TARGETS:
+        for name in self._DRAGGABLE:
             py, pz = cps[name]
-            # Use x-distance for horizontal targets, combined for z targets
-            d = abs(event.xdata - py)
+            # Normalise by axis range so y and z contribute equally
+            dy = (event.xdata - py) / self._ski_length
+            dz = ((event.ydata or pz) - pz) / z_scale
+            d = np.sqrt(dy**2 + dz**2)
             if d < best_dist:
                 best_dist = d
                 best = name
@@ -87,51 +92,57 @@ class CamberCanvas(FigureCanvas):
         L = self._ski_length
 
         y_new = float(np.clip(event.xdata, 0, L))
+        z_new = float(event.ydata) if event.ydata is not None else 0.0
         tip_junc = params.tip_rocker_length
+        tail_junc = L - params.tail_rocker_length
+        center_y = (tip_junc + tail_junc) / 2.0
+        half_span = max(1.0, center_y - tip_junc)
 
         if self._drag_target == "seg1_p1":
-            # P1 of tip rocker: arm from tip end (y=0)
-            arm = max(1.0, min(y_new, tip_junc * 0.9))
+            # Apex arm — free in both y and z
+            arm = float(np.clip(y_new, 1.0, tip_junc * 0.9))
             p.f_tip_apex_arm.setText(f"{arm:.1f}")
+            dz = z_new - params.tip_rocker_height
+            p.f_tip_apex_arm_dz.setText(f"{dz:.1f}")
 
         elif self._drag_target == "seg1_p2":
-            # P2 of tip rocker: arm = tip_junc - y_new
-            arm = max(1.0, min(tip_junc - y_new, tip_junc * 0.9))
+            arm = float(np.clip(tip_junc - y_new, 1.0, tip_junc * 0.9))
             p.f_tip_junc_arm.setText(f"{arm:.1f}")
 
         elif self._drag_target == "seg1_p3":
-            # Junction position = tip_rocker_length
-            val = max(10.0, min(y_new, L * 0.4))
+            val = float(np.clip(y_new, 10.0, L * 0.4))
             p.f_tip_length.setText(f"{val:.1f}")
 
         elif self._drag_target == "seg2_p1":
-            # P1 of camber rise: arm from tip_junc
-            tail_junc = L - params.tail_rocker_length
-            center_y = (tip_junc + tail_junc) / 2.0
-            arm = max(1.0, min(y_new - tip_junc, (center_y - tip_junc) * 0.9))
+            arm = float(np.clip(y_new - tip_junc, 1.0, half_span * 0.9))
             p.f_camber_arm.setText(f"{arm:.1f}")
 
+        elif self._drag_target == "seg2_p2":
+            arm = float(np.clip(center_y - y_new, 1.0, half_span * 0.9))
+            p.f_camber_peak_arm.setText(f"{arm:.1f}")
+
         elif self._drag_target == "seg2_p3":
-            # Camber peak: drag vertically
-            if event.ydata is not None:
-                val = max(0.0, float(event.ydata))
-                p.f_camber_amount.setText(f"{val:.1f}")
+            val = max(0.0, z_new)
+            p.f_camber_amount.setText(f"{val:.1f}")
+
+        elif self._drag_target == "seg3_p1":
+            arm = float(np.clip(y_new - center_y, 1.0, half_span * 0.9))
+            p.f_camber_peak_arm.setText(f"{arm:.1f}")
 
         elif self._drag_target == "seg3_p3":
-            # Tail junction position = tail_rocker_length (measured from tail)
-            val = max(10.0, min(L - y_new, L * 0.4))
+            val = float(np.clip(L - y_new, 10.0, L * 0.4))
             p.f_tail_length.setText(f"{val:.1f}")
 
         elif self._drag_target == "seg4_p1":
-            # P1 of tail rocker: arm from tail junction
-            tail_junc = L - params.tail_rocker_length
-            arm = max(1.0, min(y_new - tail_junc, (L - tail_junc) * 0.9))
+            arm = float(np.clip(y_new - tail_junc, 1.0, (L - tail_junc) * 0.9))
             p.f_tail_junc_arm.setText(f"{arm:.1f}")
 
         elif self._drag_target == "seg4_p2":
-            # P2 of tail rocker: arm from tail end (L)
-            arm = max(1.0, min(L - y_new, (L - (L - params.tail_rocker_length)) * 0.9))
+            # Apex arm — free in both y and z
+            arm = float(np.clip(L - y_new, 1.0, (L - tail_junc) * 0.9))
             p.f_tail_apex_arm.setText(f"{arm:.1f}")
+            dz = z_new - params.tail_rocker_height
+            p.f_tail_apex_arm_dz.setText(f"{dz:.1f}")
 
     # ── Drawing ───────────────────────────────────────────────────────────────
 
@@ -147,9 +158,12 @@ class CamberCanvas(FigureCanvas):
 
         y_pts, z_pts = compute_camber_line(L, params)
         cps = bezier_control_points(L, params)
-
-        z_max = max(params.tip_rocker_height, params.tail_rocker_height,
-                    params.camber_amount, 1.0)
+        z_max = max(
+            params.tip_rocker_height, params.tail_rocker_height,
+            params.camber_amount,
+            cps["seg1_p1"][1], cps["seg4_p2"][1],
+            1.0,
+        )
 
         # Camber curve
         ax.plot(y_pts, z_pts, color="#80c0ff", linewidth=2.0, label="Camber line", zorder=3)
@@ -179,8 +193,7 @@ class CamberCanvas(FigureCanvas):
             ax.plot(py, pz, "o", color="#ff6633", markersize=6, zorder=5)
 
         # ── Draggable control points (filled red circles) ─────────────────────
-        draggable_names = {dt[0] for dt in self._DRAG_TARGETS}
-        for name in draggable_names:
+        for name in self._DRAGGABLE:
             py, pz = cps[name]
             ax.plot(py, pz, "o", color="#ff6633", markersize=7, zorder=6)
 
@@ -233,10 +246,12 @@ class CamberParameterPanel(QWidget):
         self.f_tip_length = _FloatField(150.0)
         self.f_tip_height = _FloatField(30.0)
         self.f_tip_apex_arm = _FloatField(50.0)
+        self.f_tip_apex_arm_dz = _FloatField(0.0)
         self.f_tip_junc_arm = _FloatField(40.0)
         tip_lay.addRow("Junction pos (mm from tip):", self.f_tip_length)
         tip_lay.addRow("Rocker height (mm):", self.f_tip_height)
-        tip_lay.addRow("Apex arm (mm):", self.f_tip_apex_arm)
+        tip_lay.addRow("Apex arm length (mm):", self.f_tip_apex_arm)
+        tip_lay.addRow("Apex arm z-offset (mm):", self.f_tip_apex_arm_dz)
         tip_lay.addRow("Junction arm (mm):", self.f_tip_junc_arm)
         root.addWidget(tip_group)
 
@@ -244,8 +259,10 @@ class CamberParameterPanel(QWidget):
         camber_lay = QFormLayout(camber_group)
         self.f_camber_amount = _FloatField(5.0)
         self.f_camber_arm = _FloatField(100.0)
+        self.f_camber_peak_arm = _FloatField(100.0)
         camber_lay.addRow("Camber height (mm):", self.f_camber_amount)
-        camber_lay.addRow("Camber arm (mm):", self.f_camber_arm)
+        camber_lay.addRow("Junction arm (mm):", self.f_camber_arm)
+        camber_lay.addRow("Peak arm (mm):", self.f_camber_peak_arm)
         root.addWidget(camber_group)
 
         tail_group = QGroupBox("Tail Rocker")
@@ -254,10 +271,12 @@ class CamberParameterPanel(QWidget):
         self.f_tail_height = _FloatField(20.0)
         self.f_tail_junc_arm = _FloatField(40.0)
         self.f_tail_apex_arm = _FloatField(50.0)
+        self.f_tail_apex_arm_dz = _FloatField(0.0)
         tail_lay.addRow("Junction pos (mm from tail):", self.f_tail_length)
         tail_lay.addRow("Rocker height (mm):", self.f_tail_height)
         tail_lay.addRow("Junction arm (mm):", self.f_tail_junc_arm)
-        tail_lay.addRow("Apex arm (mm):", self.f_tail_apex_arm)
+        tail_lay.addRow("Apex arm length (mm):", self.f_tail_apex_arm)
+        tail_lay.addRow("Apex arm z-offset (mm):", self.f_tail_apex_arm_dz)
         root.addWidget(tail_group)
 
         button_lay = QHBoxLayout()
@@ -279,11 +298,14 @@ class CamberParameterPanel(QWidget):
             tip_rocker_length=self.f_tip_length.value(),
             tip_rocker_height=self.f_tip_height.value(),
             tip_apex_arm=self.f_tip_apex_arm.value(),
+            tip_apex_arm_dz=self.f_tip_apex_arm_dz.value(),
             tip_junc_arm=self.f_tip_junc_arm.value(),
             camber_amount=self.f_camber_amount.value(),
             camber_arm=self.f_camber_arm.value(),
+            camber_peak_arm=self.f_camber_peak_arm.value(),
             tail_junc_arm=self.f_tail_junc_arm.value(),
             tail_apex_arm=self.f_tail_apex_arm.value(),
+            tail_apex_arm_dz=self.f_tail_apex_arm_dz.value(),
             tail_rocker_length=self.f_tail_length.value(),
             tail_rocker_height=self.f_tail_height.value(),
         )
@@ -292,11 +314,14 @@ class CamberParameterPanel(QWidget):
         self.f_tip_length.setText(str(p.tip_rocker_length))
         self.f_tip_height.setText(str(p.tip_rocker_height))
         self.f_tip_apex_arm.setText(str(getattr(p, "tip_apex_arm", 50.0)))
+        self.f_tip_apex_arm_dz.setText(str(getattr(p, "tip_apex_arm_dz", 0.0)))
         self.f_tip_junc_arm.setText(str(getattr(p, "tip_junc_arm", 40.0)))
         self.f_camber_amount.setText(str(p.camber_amount))
         self.f_camber_arm.setText(str(getattr(p, "camber_arm", 100.0)))
+        self.f_camber_peak_arm.setText(str(getattr(p, "camber_peak_arm", 100.0)))
         self.f_tail_junc_arm.setText(str(getattr(p, "tail_junc_arm", 40.0)))
         self.f_tail_apex_arm.setText(str(getattr(p, "tail_apex_arm", 50.0)))
+        self.f_tail_apex_arm_dz.setText(str(getattr(p, "tail_apex_arm_dz", 0.0)))
         self.f_tail_length.setText(str(p.tail_rocker_length))
         self.f_tail_height.setText(str(p.tail_rocker_height))
 
@@ -336,11 +361,14 @@ class CamberTab(QWidget):
             self.panel.f_tip_length,
             self.panel.f_tip_height,
             self.panel.f_tip_apex_arm,
+            self.panel.f_tip_apex_arm_dz,
             self.panel.f_tip_junc_arm,
             self.panel.f_camber_amount,
             self.panel.f_camber_arm,
+            self.panel.f_camber_peak_arm,
             self.panel.f_tail_junc_arm,
             self.panel.f_tail_apex_arm,
+            self.panel.f_tail_apex_arm_dz,
             self.panel.f_tail_length,
             self.panel.f_tail_height,
         ):

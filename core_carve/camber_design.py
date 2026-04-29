@@ -23,12 +23,15 @@ class CamberParams:
     tail_rocker_length: float = 150.0   # mm from tail to rocker/camber junction
     tail_rocker_height: float = 20.0    # mm rise at tail end
 
-    # Bezier control arm lengths (all positive, in mm along-ski direction)
-    tip_apex_arm: float = 50.0      # arm from tip end toward junction (P1 of seg 1)
+    # Bezier control arm lengths and offsets
+    tip_apex_arm: float = 50.0      # y-distance of seg1 P1 from tip end
+    tip_apex_arm_dz: float = 0.0    # z-offset of seg1 P1 relative to tip_rocker_height
     tip_junc_arm: float = 40.0      # arm from tip junction toward tip (P2 of seg 1)
-    camber_arm: float = 100.0       # arm from each junction toward camber peak (segs 2 & 3)
+    camber_arm: float = 100.0       # arm from each junction toward camber peak (seg2 P1, seg3 P2)
+    camber_peak_arm: float = 100.0  # arm from camber peak outward (seg2 P2, seg3 P1)
     tail_junc_arm: float = 40.0     # arm from tail junction toward tail (P1 of seg 4)
-    tail_apex_arm: float = 50.0     # arm from tail end toward junction (P2 of seg 4)
+    tail_apex_arm: float = 50.0     # y-distance of seg4 P2 from tail end
+    tail_apex_arm_dz: float = 0.0   # z-offset of seg4 P2 relative to tail_rocker_height
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -72,18 +75,18 @@ def compute_camber_line(
     tip_h = params.tip_rocker_height
     tail_h = params.tail_rocker_height
     ca = params.camber_amount
-    ca_arm = max(1.0, params.camber_arm)
+    half_span = max(1.0, center_y - tip_junc)
 
-    # Clamp arms so control points stay in reasonable range
     tip_apex = min(params.tip_apex_arm, tip_junc * 0.9)
     tip_ja = min(params.tip_junc_arm, tip_junc * 0.9)
     tail_ja = min(params.tail_junc_arm, (L - tail_junc) * 0.9)
     tail_apex = min(params.tail_apex_arm, (L - tail_junc) * 0.9)
-    ca_arm = min(ca_arm, (center_y - tip_junc) * 0.9)
+    ca_arm = float(np.clip(params.camber_arm, 1.0, half_span * 0.9))
+    ca_peak_arm = float(np.clip(params.camber_peak_arm, 1.0, half_span * 0.9))
 
     seg1 = _bezier_cubic(
         np.array([0.0, tip_h]),
-        np.array([tip_apex, tip_h]),
+        np.array([tip_apex, tip_h + params.tip_apex_arm_dz]),
         np.array([tip_junc - tip_ja, 0.0]),
         np.array([tip_junc, 0.0]),
         n=60,
@@ -91,13 +94,13 @@ def compute_camber_line(
     seg2 = _bezier_cubic(
         np.array([tip_junc, 0.0]),
         np.array([tip_junc + ca_arm, 0.0]),
-        np.array([center_y - ca_arm, ca]),
+        np.array([center_y - ca_peak_arm, ca]),
         np.array([center_y, ca]),
         n=60,
     )
     seg3 = _bezier_cubic(
         np.array([center_y, ca]),
-        np.array([center_y + ca_arm, ca]),
+        np.array([center_y + ca_peak_arm, ca]),
         np.array([tail_junc - ca_arm, 0.0]),
         np.array([tail_junc, 0.0]),
         n=60,
@@ -105,7 +108,7 @@ def compute_camber_line(
     seg4 = _bezier_cubic(
         np.array([tail_junc, 0.0]),
         np.array([tail_junc + tail_ja, 0.0]),
-        np.array([L - tail_apex, tail_h]),
+        np.array([L - tail_apex, tail_h + params.tail_apex_arm_dz]),
         np.array([L, tail_h]),
         n=60,
     )
@@ -133,28 +136,29 @@ def bezier_control_points(
     tip_h = params.tip_rocker_height
     tail_h = params.tail_rocker_height
     ca = params.camber_amount
-    ca_arm = max(1.0, params.camber_arm)
+    half_span = max(1.0, center_y - tip_junc)
     tip_apex = min(params.tip_apex_arm, tip_junc * 0.9)
     tip_ja = min(params.tip_junc_arm, tip_junc * 0.9)
     tail_ja = min(params.tail_junc_arm, (L - tail_junc) * 0.9)
     tail_apex = min(params.tail_apex_arm, (L - tail_junc) * 0.9)
-    ca_arm = min(ca_arm, (center_y - tip_junc) * 0.9)
+    ca_arm = float(np.clip(params.camber_arm, 1.0, half_span * 0.9))
+    ca_peak_arm = float(np.clip(params.camber_peak_arm, 1.0, half_span * 0.9))
 
     return {
         "seg1_p0": (0.0, tip_h),
-        "seg1_p1": (tip_apex, tip_h),
+        "seg1_p1": (tip_apex, tip_h + params.tip_apex_arm_dz),
         "seg1_p2": (tip_junc - tip_ja, 0.0),
         "seg1_p3": (tip_junc, 0.0),
         "seg2_p0": (tip_junc, 0.0),
         "seg2_p1": (tip_junc + ca_arm, 0.0),
-        "seg2_p2": (center_y - ca_arm, ca),
+        "seg2_p2": (center_y - ca_peak_arm, ca),
         "seg2_p3": (center_y, ca),
         "seg3_p0": (center_y, ca),
-        "seg3_p1": (center_y + ca_arm, ca),
+        "seg3_p1": (center_y + ca_peak_arm, ca),
         "seg3_p2": (tail_junc - ca_arm, 0.0),
         "seg3_p3": (tail_junc, 0.0),
         "seg4_p0": (tail_junc, 0.0),
         "seg4_p1": (tail_junc + tail_ja, 0.0),
-        "seg4_p2": (L - tail_apex, tail_h),
+        "seg4_p2": (L - tail_apex, tail_h + params.tail_apex_arm_dz),
         "seg4_p3": (L, tail_h),
     }
