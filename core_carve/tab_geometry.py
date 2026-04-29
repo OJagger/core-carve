@@ -318,6 +318,14 @@ class GeometryTab(QWidget):
         self.panel.btn_load_json.clicked.connect(self._load_json)
         self.panel.btn_save_json.clicked.connect(self._save_json)
         self.panel.btn_update.clicked.connect(self._update_geometry)
+        self._load_ski_callback = None
+        self._save_ski_callback = None
+
+    def set_load_ski_callback(self, fn):
+        self._load_ski_callback = fn
+
+    def set_save_ski_callback(self, fn):
+        self._save_ski_callback = fn
 
     def load_test_files(self):
         """Auto-load test DXF and JSON files (for development)."""
@@ -358,6 +366,13 @@ class GeometryTab(QWidget):
             QMessageBox.critical(self, "DXF Error", str(exc))
 
     def _load_json(self):
+        if self._load_ski_callback is not None:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Load Ski Definition", "", "JSON Files (*.json);;All Files (*)"
+            )
+            if path:
+                self._load_ski_callback(path)
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "Open Parameters JSON", "", "JSON Files (*.json);;All Files (*)"
         )
@@ -371,6 +386,9 @@ class GeometryTab(QWidget):
             QMessageBox.critical(self, "JSON Error", str(exc))
 
     def _save_json(self):
+        if self._save_ski_callback is not None:
+            self._save_ski_callback()
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Parameters JSON", "ski_params.json",
             "JSON Files (*.json);;All Files (*)"

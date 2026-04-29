@@ -29,12 +29,18 @@ class MainWindow(QMainWindow):
 
         self.base_tab = BaseTab()
         self.tabs.addTab(self.base_tab, "Base Design")
+        self.base_tab.set_load_ski_callback(self._load_ski_definition)
+        self.base_tab.set_save_ski_callback(self._save_ski_file)
 
         self.geometry_tab = GeometryTab()
         self.tabs.addTab(self.geometry_tab, "Core Design")
+        self.geometry_tab.set_load_ski_callback(self._load_ski_definition)
+        self.geometry_tab.set_save_ski_callback(self._save_ski_file)
 
         self.camber_tab = CamberTab()
         self.tabs.addTab(self.camber_tab, "Camber Design")
+        self.camber_tab.set_load_ski_callback(self._load_ski_definition)
+        self.camber_tab.set_save_ski_callback(self._save_ski_file)
 
         # Blank, G-code, and Profile tabs (created when geometry is loaded)
         self.blank_tab = None
@@ -52,12 +58,6 @@ class MainWindow(QMainWindow):
         self._syncing_splitters = False
         for s in self._viz_splitters:
             s.splitterMoved.connect(self._sync_splitters)
-
-        # Wire geometry tab "Save ski" to combined save (includes planform params)
-        self.geometry_tab.panel.btn_save_json.clicked.disconnect(
-            self.geometry_tab._save_json
-        )
-        self.geometry_tab.panel.btn_save_json.clicked.connect(self._save_ski_file)
 
         # Connect to geometry updates
         self.tabs.currentChanged.connect(self._check_geometry_loaded)
@@ -83,21 +83,23 @@ class MainWindow(QMainWindow):
         finally:
             self._syncing_splitters = False
 
-    def _save_ski_file(self):
-        """Save all ski params (planform + core) to one JSON file."""
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Ski Definition", "ski_params.json",
-            "JSON Files (*.json);;All Files (*)"
-        )
+    def _save_ski_file(self, path: str = None):
+        """Save all ski params to one hierarchical JSON file."""
+        if path is None:
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save Ski Definition", "ski_params.json",
+                "JSON Files (*.json);;All Files (*)"
+            )
         if not path:
             return
         try:
-            ski_data = {}
-            ski_data.update(self.design_tab.panel.get_params().to_dict())
-            ski_data["base"] = self.base_tab.panel.get_params().to_dict()
-            ski_data["camber"] = self.camber_tab.panel.get_params().to_dict()
             from dataclasses import asdict
-            ski_data["core"] = asdict(self.geometry_tab.panel.get_params())
+            ski_data = {
+                "outline": self.design_tab.panel.get_params().to_dict(),
+                "base": self.base_tab.panel.get_params().to_dict(),
+                "camber": self.camber_tab.panel.get_params().to_dict(),
+                "core": asdict(self.geometry_tab.panel.get_params()),
+            }
             with open(path, "w") as f:
                 json.dump(ski_data, f, indent=2)
         except Exception as exc:
@@ -109,35 +111,18 @@ class MainWindow(QMainWindow):
             with open(path) as f:
                 ski_data = json.load(f)
 
-            # Load outline design params
-            if "length" in ski_data:
-                outline_params = self.design_tab.panel.get_params()
-                from core_carve.ski_design import SkiPlanformParams
-                updated_params = SkiPlanformParams(
-                    length=ski_data.get("length", outline_params.length),
-                    waist_w=ski_data.get("waist_w", outline_params.waist_w),
-                    sidecut_radius=ski_data.get("dimensions", {}).get("sidecut_radius", outline_params.sidecut_radius),
-                    tip_l=ski_data.get("tip_l", outline_params.tip_l),
-                    tip_w=ski_data.get("tip_w", outline_params.tip_w),
-                    tail_l=ski_data.get("tail_l", outline_params.tail_l),
-                    tail_w=ski_data.get("tail_w", outline_params.tail_w),
-                    setback=ski_data.get("setback", outline_params.setback),
-                    tip_trans_len=ski_data.get("tip_trans_len", outline_params.tip_trans_len),
-                    tail_trans_len=ski_data.get("tail_trans_len", outline_params.tail_trans_len),
-                    tip_apex_arm=ski_data.get("control_arms", {}).get("tip_apex_arm", outline_params.tip_apex_arm),
-                    tip_junc_arm=ski_data.get("control_arms", {}).get("tip_junc_arm", outline_params.tip_junc_arm),
-                    tip_trans_junc_arm=ski_data.get("control_arms", {}).get("tip_trans_junc_arm", outline_params.tip_trans_junc_arm),
-                    tip_trans_arc_arm=ski_data.get("control_arms", {}).get("tip_trans_arc_arm", outline_params.tip_trans_arc_arm),
-                    tail_trans_arc_arm=ski_data.get("control_arms", {}).get("tail_trans_arc_arm", outline_params.tail_trans_arc_arm),
-                    tail_trans_junc_arm=ski_data.get("control_arms", {}).get("tail_trans_junc_arm", outline_params.tail_trans_junc_arm),
-                    tail_junc_arm=ski_data.get("control_arms", {}).get("tail_junc_arm", outline_params.tail_junc_arm),
-                    tail_apex_arm=ski_data.get("control_arms", {}).get("tail_apex_arm", outline_params.tail_apex_arm),
-                )
-                self.design_tab._update_from_params(updated_params)
-                # Get the generated outline and set it on geometry tab
-                if self.design_tab._result is not None:
-                    self.geometry_tab._outline = self.design_tab._result.outline.copy()
-                    self.base_tab.set_outline(self.design_tab._result.outline.copy())
+            # Load outline design params — support new hierarchical format and old flat format
+            from core_carve.ski_design import SkiPlanformParams
+            outline_src = ski_data.get("outline", ski_data)
+            if outline_src:
+                try:
+                    updated_params = SkiPlanformParams.from_dict(outline_src)
+                    self.design_tab._update_from_params(updated_params)
+                    if self.design_tab._result is not None:
+                        self.geometry_tab._outline = self.design_tab._result.outline.copy()
+                        self.base_tab.set_outline(self.design_tab._result.outline.copy())
+                except Exception:
+                    pass
 
             # Load base design params
             if "base" in ski_data:

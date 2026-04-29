@@ -291,6 +291,14 @@ class BaseTab(QWidget):
         self.panel.btn_save_params.clicked.connect(self._save_params)
         self.panel.btn_generate_gcode.clicked.connect(self._generate_gcode)
         self.panel.btn_save_gcode.clicked.connect(self._save_gcode)
+        self._load_ski_callback = None
+        self._save_ski_callback = None
+
+    def set_load_ski_callback(self, fn):
+        self._load_ski_callback = fn
+
+    def set_save_ski_callback(self, fn):
+        self._save_ski_callback = fn
 
     def set_outline(self, outline):
         self._outline = outline
@@ -375,12 +383,18 @@ class BaseTab(QWidget):
             QMessageBox.critical(self, "Save Error", str(e))
 
     def _load_params(self):
+        if self._load_ski_callback is not None:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Load Ski Definition", "", "JSON Files (*.json);;All Files (*)"
+            )
+            if path:
+                self._load_ski_callback(path)
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "Load Parameters", "", "JSON Files (*.json);;All Files (*)"
         )
         if not path:
             return
-
         try:
             params = BaseParams.from_json(path)
             self.panel.set_params(params)
@@ -389,13 +403,15 @@ class BaseTab(QWidget):
             QMessageBox.critical(self, "Load Error", str(e))
 
     def _save_params(self):
+        if self._save_ski_callback is not None:
+            self._save_ski_callback()
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Parameters", "base_params.json",
             "JSON Files (*.json);;All Files (*)"
         )
         if not path:
             return
-
         try:
             self.panel.get_params().to_json(path)
             QMessageBox.information(self, "Saved", f"Parameters saved to {Path(path).name}")

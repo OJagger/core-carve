@@ -287,6 +287,14 @@ class CamberTab(QWidget):
 
         self.panel.btn_load_params.clicked.connect(self._load_params)
         self.panel.btn_save_params.clicked.connect(self._save_params)
+        self._load_ski_callback = None
+        self._save_ski_callback = None
+
+    def set_load_ski_callback(self, fn):
+        self._load_ski_callback = fn
+
+    def set_save_ski_callback(self, fn):
+        self._save_ski_callback = fn
 
     def set_ski_length(self, ski_length: float):
         self._ski_length = ski_length
@@ -303,6 +311,13 @@ class CamberTab(QWidget):
             self.panel.lbl_status.setStyleSheet("color: #ff6060;")
 
     def _load_params(self):
+        if self._load_ski_callback is not None:
+            path, _ = QFileDialog.getOpenFileName(
+                self, "Load Ski Definition", "", "JSON Files (*.json);;All Files (*)"
+            )
+            if path:
+                self._load_ski_callback(path)
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "Load Parameters", "", "JSON Files (*.json);;All Files (*)"
         )
@@ -316,6 +331,9 @@ class CamberTab(QWidget):
             QMessageBox.critical(self, "Load Error", str(e))
 
     def _save_params(self):
+        if self._save_ski_callback is not None:
+            self._save_ski_callback()
+            return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Parameters", "camber_params.json",
             "JSON Files (*.json);;All Files (*)"

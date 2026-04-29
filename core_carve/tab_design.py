@@ -667,8 +667,8 @@ class DesignTab(QWidget):
             with open(path) as f:
                 data = json.load(f)
 
-            # Check if this is a full ski definition (has core, base, or camber keys)
-            is_full_definition = any(k in data for k in ["core", "base", "camber"])
+            # Check if this is a full ski definition
+            is_full_definition = any(k in data for k in ["outline", "core", "base", "camber"])
 
             if is_full_definition and self._on_ski_definition_loaded is not None:
                 # Let main window handle full definition
