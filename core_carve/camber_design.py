@@ -1,4 +1,4 @@
-"""Camber design: vertical ski shape with rocker and camber sections."""
+"""Camber design: vertical ski shape with rocker and camber sections using Bezier cubics."""
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
@@ -6,22 +6,29 @@ import json
 from pathlib import Path
 
 import numpy as np
-from scipy.interpolate import CubicSpline
+
+
+def _bezier_cubic(p0, p1, p2, p3, n: int = 80) -> np.ndarray:
+    t = np.linspace(0.0, 1.0, n)[:, np.newaxis]
+    return (1-t)**3*p0 + 3*(1-t)**2*t*p1 + 3*(1-t)*t**2*p2 + t**3*p3
 
 
 @dataclass
 class CamberParams:
-    """Camber design parameters for vertical ski shape."""
-    # Tip rocker
+    """Camber design parameters — four cubic Bezier segments."""
+    # Section endpoints
     tip_rocker_length: float = 150.0    # mm from tip to rocker/camber junction
     tip_rocker_height: float = 30.0     # mm rise at tip end
-
-    # Camber underfoot
-    camber_amount: float = 5.0          # mm rise at centre (positive = arch up)
-
-    # Tail rocker
+    camber_amount: float = 5.0          # mm rise at camber peak (centre)
     tail_rocker_length: float = 150.0   # mm from tail to rocker/camber junction
     tail_rocker_height: float = 20.0    # mm rise at tail end
+
+    # Bezier control arm lengths (all positive, in mm along-ski direction)
+    tip_apex_arm: float = 50.0      # arm from tip end toward junction (P1 of seg 1)
+    tip_junc_arm: float = 40.0      # arm from tip junction toward tip (P2 of seg 1)
+    camber_arm: float = 100.0       # arm from each junction toward camber peak (segs 2 & 3)
+    tail_junc_arm: float = 40.0     # arm from tail junction toward tail (P1 of seg 4)
+    tail_apex_arm: float = 50.0     # arm from tail end toward junction (P2 of seg 4)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -37,62 +44,117 @@ class CamberParams:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
-def compute_camber_line(ski_length: float, params: CamberParams) -> tuple[np.ndarray, np.ndarray]:
+def compute_camber_line(
+    ski_length: float, params: CamberParams
+) -> tuple[np.ndarray, np.ndarray]:
     """
-    Compute camber line as three spline sections.
+    Compute the camber line from four cubic Bezier segments.
 
-    Section 1 (tip rocker): y=0 → y=tip_rocker_length
-      - Free tangent at the tip end, horizontal tangent at the junction (z=0).
-    Section 2 (camber): y=tip_rocker_length → y=ski_length-tail_rocker_length
-      - Horizontal tangent at both ends (z=0) and at the centre peak.
-    Section 3 (tail rocker): y=ski_length-tail_rocker_length → y=ski_length
-      - Horizontal tangent at the junction (z=0), free tangent at the tail end.
+    Segment 1 — tip rocker (tip end → tip junction):
+      P0=(0, tip_h), P1=(tip_apex_arm, tip_h),
+      P2=(tip_junc-tip_junc_arm, 0), P3=(tip_junc, 0)
+    Segment 2 — camber rise (tip junction → peak):
+      P0=(tip_junc, 0), P1=(tip_junc+camber_arm, 0),
+      P2=(center_y-camber_arm, camber_amount), P3=(center_y, camber_amount)
+    Segment 3 — camber fall (peak → tail junction):
+      P0=(center_y, camber_amount), P1=(center_y+camber_arm, camber_amount),
+      P2=(tail_junc-camber_arm, 0), P3=(tail_junc, 0)
+    Segment 4 — tail rocker (tail junction → tail end):
+      P0=(tail_junc, 0), P1=(tail_junc+tail_junc_arm, 0),
+      P2=(L-tail_apex_arm, tail_h), P3=(L, tail_h)
 
-    Returns:
-        (y_points, z_points) where z is vertical height above snow contact.
+    Returns (y_points, z_points).
     """
-    tip_junc = params.tip_rocker_length
-    tail_junc = ski_length - params.tail_rocker_length
+    L = ski_length
+    tip_junc = float(np.clip(params.tip_rocker_length, 0, L * 0.4))
+    tail_junc = float(np.clip(L - params.tail_rocker_length, L * 0.6, L))
     center_y = (tip_junc + tail_junc) / 2.0
+    tip_h = params.tip_rocker_height
+    tail_h = params.tail_rocker_height
+    ca = params.camber_amount
+    ca_arm = max(1.0, params.camber_arm)
 
-    # Guard against degenerate params
-    tip_junc = min(tip_junc, ski_length * 0.4)
-    tail_junc = max(tail_junc, ski_length * 0.6)
+    # Clamp arms so control points stay in reasonable range
+    tip_apex = min(params.tip_apex_arm, tip_junc * 0.9)
+    tip_ja = min(params.tip_junc_arm, tip_junc * 0.9)
+    tail_ja = min(params.tail_junc_arm, (L - tail_junc) * 0.9)
+    tail_apex = min(params.tail_apex_arm, (L - tail_junc) * 0.9)
+    ca_arm = min(ca_arm, (center_y - tip_junc) * 0.9)
 
-    # ── Section 1: tip rocker ─────────────────────────────────────────────────
-    # y: 0 → tip_junc,  z: tip_height → 0
-    # Horizontal tangent (dz/dy = 0) at the junction end.
-    # At the tip end we let the spline be natural (not constrained).
-    tip_y = np.array([0.0, tip_junc])
-    tip_z = np.array([params.tip_rocker_height, 0.0])
-    # bc_type: (order, value) — first derivative at each end
-    tip_spline = CubicSpline(tip_y, tip_z, bc_type=((2, 0.0), (1, 0.0)))
-
-    # ── Section 2: camber ─────────────────────────────────────────────────────
-    # Endpoints z=0, centre peak z=camber_amount, all with horizontal tangents.
-    camber_y = np.array([tip_junc, center_y, tail_junc])
-    camber_z = np.array([0.0, params.camber_amount, 0.0])
-    # Enforce horizontal first derivative at all three points using known-derivative spline
-    camber_spline = CubicSpline(
-        camber_y, camber_z,
-        bc_type=((1, 0.0), (1, 0.0)),
+    seg1 = _bezier_cubic(
+        np.array([0.0, tip_h]),
+        np.array([tip_apex, tip_h]),
+        np.array([tip_junc - tip_ja, 0.0]),
+        np.array([tip_junc, 0.0]),
+        n=60,
+    )
+    seg2 = _bezier_cubic(
+        np.array([tip_junc, 0.0]),
+        np.array([tip_junc + ca_arm, 0.0]),
+        np.array([center_y - ca_arm, ca]),
+        np.array([center_y, ca]),
+        n=60,
+    )
+    seg3 = _bezier_cubic(
+        np.array([center_y, ca]),
+        np.array([center_y + ca_arm, ca]),
+        np.array([tail_junc - ca_arm, 0.0]),
+        np.array([tail_junc, 0.0]),
+        n=60,
+    )
+    seg4 = _bezier_cubic(
+        np.array([tail_junc, 0.0]),
+        np.array([tail_junc + tail_ja, 0.0]),
+        np.array([L - tail_apex, tail_h]),
+        np.array([L, tail_h]),
+        n=60,
     )
 
-    # ── Section 3: tail rocker ────────────────────────────────────────────────
-    tail_y = np.array([tail_junc, ski_length])
-    tail_z = np.array([0.0, params.tail_rocker_height])
-    tail_spline = CubicSpline(tail_y, tail_z, bc_type=((1, 0.0), (2, 0.0)))
+    pts = np.vstack([seg1, seg2[1:], seg3[1:], seg4[1:]])
+    return pts[:, 0], pts[:, 1]
 
-    # ── Sample ────────────────────────────────────────────────────────────────
-    tip_pts = np.linspace(0.0, tip_junc, 80)
-    camber_pts = np.linspace(tip_junc, tail_junc, 120)
-    tail_pts = np.linspace(tail_junc, ski_length, 80)
 
-    y_out = np.concatenate([tip_pts, camber_pts[1:], tail_pts[1:]])
-    z_out = np.concatenate([
-        tip_spline(tip_pts),
-        camber_spline(camber_pts[1:]),
-        tail_spline(tail_pts[1:]),
-    ])
+def bezier_control_points(
+    ski_length: float, params: CamberParams
+) -> dict:
+    """
+    Return all Bezier control points for the four segments as a dict of named points.
 
-    return y_out, z_out
+    Keys: seg1_p0, seg1_p1, seg1_p2, seg1_p3,
+          seg2_p0, seg2_p1, seg2_p2, seg2_p3,
+          seg3_p0, seg3_p1, seg3_p2, seg3_p3,
+          seg4_p0, seg4_p1, seg4_p2, seg4_p3
+    Each value is (y, z).
+    """
+    L = ski_length
+    tip_junc = float(np.clip(params.tip_rocker_length, 0, L * 0.4))
+    tail_junc = float(np.clip(L - params.tail_rocker_length, L * 0.6, L))
+    center_y = (tip_junc + tail_junc) / 2.0
+    tip_h = params.tip_rocker_height
+    tail_h = params.tail_rocker_height
+    ca = params.camber_amount
+    ca_arm = max(1.0, params.camber_arm)
+    tip_apex = min(params.tip_apex_arm, tip_junc * 0.9)
+    tip_ja = min(params.tip_junc_arm, tip_junc * 0.9)
+    tail_ja = min(params.tail_junc_arm, (L - tail_junc) * 0.9)
+    tail_apex = min(params.tail_apex_arm, (L - tail_junc) * 0.9)
+    ca_arm = min(ca_arm, (center_y - tip_junc) * 0.9)
+
+    return {
+        "seg1_p0": (0.0, tip_h),
+        "seg1_p1": (tip_apex, tip_h),
+        "seg1_p2": (tip_junc - tip_ja, 0.0),
+        "seg1_p3": (tip_junc, 0.0),
+        "seg2_p0": (tip_junc, 0.0),
+        "seg2_p1": (tip_junc + ca_arm, 0.0),
+        "seg2_p2": (center_y - ca_arm, ca),
+        "seg2_p3": (center_y, ca),
+        "seg3_p0": (center_y, ca),
+        "seg3_p1": (center_y + ca_arm, ca),
+        "seg3_p2": (tail_junc - ca_arm, 0.0),
+        "seg3_p3": (tail_junc, 0.0),
+        "seg4_p0": (tail_junc, 0.0),
+        "seg4_p1": (tail_junc + tail_ja, 0.0),
+        "seg4_p2": (L - tail_apex, tail_h),
+        "seg4_p3": (L, tail_h),
+    }
