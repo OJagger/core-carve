@@ -4,8 +4,7 @@ from __future__ import annotations
 import numpy as np
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QPushButton, QLabel, QLineEdit, QComboBox, QSpinBox,
-    QGroupBox, QFormLayout, QMessageBox, QScrollArea,
+    QLabel, QLineEdit, QComboBox, QGroupBox, QFormLayout, QScrollArea,
     QSizePolicy,
 )
 from PyQt5.QtCore import Qt

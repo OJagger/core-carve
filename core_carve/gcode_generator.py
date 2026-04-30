@@ -119,7 +119,7 @@ def generate_slot_gcode(
 
     # Build moves and G-code
     moves = []
-    gcode_lines = ["G21 G17 G90 G94", f"G00 Z{slot_params.clearance_height:.3f}", f"S{slot_params.spindle_speed} M03"]
+    gcode_lines = ["; Sidewall slot G-code - compatible with Roland MDX-40A / Maslow V4\nG21 G17 G90 G94", f"G00 Z{slot_params.clearance_height:.3f}", f"S{slot_params.spindle_speed} M03"]
 
     # Multi-pass cutting: depth passes × width passes per slot
     n_depth_passes = int(np.ceil(slot_depth / slot_params.depth_per_pass))
@@ -134,16 +134,15 @@ def generate_slot_gcode(
     if slot_params.stepover_direction == "climb":
         width_offsets = width_offsets[::-1]
 
-    # Pre-calculate tab zones for each slot
+    # Pre-calculate tab zones for each slot — position tabs by along-ski Y coordinate
     tab_zones = []
     for slot_y_samples, slot_centerline in slots:
-        # Arc-length parameterization to find tab positions
-        arc_length = np.cumsum(np.concatenate([[0], np.linalg.norm(np.diff(np.column_stack([slot_y_samples, slot_centerline])), axis=1)]))
-        total_arc = arc_length[-1]
-        tab_centers_arc = np.arange(0, total_arc, slot_params.tab_spacing)
-        tab_start_arc = tab_centers_arc - slot_params.tab_length / 2
-        tab_end_arc = tab_centers_arc + slot_params.tab_length / 2
-        tab_zones.append((arc_length, tab_start_arc, tab_end_arc))
+        # Tabs spaced every tab_spacing mm along the ski Y-axis (independent of slot curvature)
+        y_min, y_max = slot_y_samples[0], slot_y_samples[-1]
+        tab_centers_y = np.arange(y_min + slot_params.tab_spacing / 2.0, y_max, slot_params.tab_spacing)
+        tab_start_y = tab_centers_y - slot_params.tab_length / 2
+        tab_end_y = tab_centers_y + slot_params.tab_length / 2
+        tab_zones.append((tab_start_y, tab_end_y))
 
     # Generate toolpaths, alternating direction to minimize rapids between slots
     for depth_pass in range(n_depth_passes):
@@ -151,7 +150,7 @@ def generate_slot_gcode(
 
         for width_offset in width_offsets:
             for slot_idx, (slot_y_samples, slot_centerline) in enumerate(slots):
-                arc_length, tab_start_arc, tab_end_arc = tab_zones[slot_idx]
+                tab_start_y, tab_end_y = tab_zones[slot_idx]
 
                 # Alternate direction: even indices forward, odd indices backward
                 reverse_cut = slot_idx % 2 == 1
@@ -174,17 +173,28 @@ def generate_slot_gcode(
                 gcode_lines.append(f"G01 Z{z_target:.3f} F{slot_params.plunge_feed:.1f}")
 
                 # Cut along slot in chosen direction, respecting tabs
+                prev_z = z_target
+                tab_z = -(slot_depth - slot_params.tab_thickness)
                 for i in cut_indices:
                     x = slot_y_samples[i]
                     y = slot_centerline[i] + width_offset
-                    arc = arc_length[i]
-                    # Check if in a tab zone
-                    in_tab = any(start <= arc <= end for start, end in zip(tab_start_arc, tab_end_arc))
-                    z = max(z_target, -(slot_depth - slot_params.tab_thickness)) if in_tab else z_target
-                    feed = slot_params.cutting_feed
-                    moves.append(Move(x, y, z, is_rapid=False, feed=feed))
+                    # Check if current position is within a tab zone (by Y coordinate)
+                    in_tab = any(start <= x <= end for start, end in zip(tab_start_y, tab_end_y))
+                    # For shallow passes, ignore tabs; for deep passes, lift at tabs
+                    cur_z = max(z_target, tab_z) if in_tab else z_target
                     mach_x, mach_y = transform_to_machine_space(x, y)
-                    gcode_lines.append(f"G01 X{mach_x:.3f} Y{mach_y:.3f} Z{z:.3f} F{feed:.1f}")
+                    if cur_z != prev_z:
+                        # XY move at old Z first (creates rectangular wall)
+                        moves.append(Move(x, y, prev_z, is_rapid=False, feed=slot_params.cutting_feed))
+                        gcode_lines.append(f"G01 X{mach_x:.3f} Y{mach_y:.3f} F{slot_params.cutting_feed:.1f}")
+                        # Vertical Z move
+                        z_feed = slot_params.plunge_feed if cur_z < prev_z else slot_params.cutting_feed
+                        moves.append(Move(x, y, cur_z, is_rapid=False, feed=z_feed))
+                        gcode_lines.append(f"G01 Z{cur_z:.3f} F{z_feed:.1f}")
+                    else:
+                        moves.append(Move(x, y, cur_z, is_rapid=False, feed=slot_params.cutting_feed))
+                        gcode_lines.append(f"G01 X{mach_x:.3f} Y{mach_y:.3f} Z{cur_z:.3f} F{slot_params.cutting_feed:.1f}")
+                    prev_z = cur_z
 
                 # Rapid to clearance
                 end_idx = cut_indices[-1]

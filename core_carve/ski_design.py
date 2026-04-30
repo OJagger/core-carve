@@ -2,9 +2,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 

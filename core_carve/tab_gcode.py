@@ -15,9 +15,6 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.patches as patches
 import matplotlib.cm as cm
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-from matplotlib.widgets import Button
 
 from core_carve.gcode_generator import SlotParams, generate_slot_gcode
 from core_carve.ski_geometry import SkiGeometry, half_widths_at_y
@@ -697,7 +694,7 @@ class GcodeTab(QWidget):
             else:
                 self.panel.lbl_validation.setText("✓ Ready to generate")
                 self.panel.lbl_validation.setStyleSheet("color: #60cc60;")
-        except Exception as e:
+        except Exception:
             # Show blank outline with proper axis limits before g-code generation
             try:
                 blank = self.blank_tab.panel.get_blank()

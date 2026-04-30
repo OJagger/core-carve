@@ -8,23 +8,27 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QLineEdit, QGroupBox, QFormLayout,
     QMessageBox, QScrollArea, QSizePolicy, QFileDialog,
+    QComboBox, QSpinBox, QCheckBox,
 )
 from PyQt5.QtCore import Qt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from core_carve.camber_design import CamberParams, compute_camber_line, bezier_control_points
+from core_carve.materials import MaterialDatabase
+from core_carve.ski_mechanics import LayupConfig, PlyCfg, compute_mechanics
 
 
 # ── Canvas ────────────────────────────────────────────────────────────────────
 
 class CamberCanvas(FigureCanvas):
     def __init__(self, tab: "CamberTab"):
-        self.fig = Figure(facecolor="#1e1e1e", figsize=(12, 4))
+        self.fig = Figure(facecolor="#1e1e1e", figsize=(12, 6))
         super().__init__(self.fig)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._tab = tab
         self.ax = None
+        self.ax2 = None
         self._ski_length = 1800.0
         self._params: CamberParams | None = None
         self._drag_target: str | None = None
@@ -35,14 +39,17 @@ class CamberCanvas(FigureCanvas):
 
     def _setup_axes(self):
         self.fig.clear()
-        self.ax = self.fig.add_subplot(111)
-        self.ax.set_facecolor("#2b2b2b")
-        self.ax.tick_params(colors="#cccccc", labelsize=8)
-        for spine in self.ax.spines.values():
-            spine.set_edgecolor("#555555")
-        self.ax.xaxis.label.set_color("#cccccc")
-        self.ax.yaxis.label.set_color("#cccccc")
-        self.ax.title.set_color("#eeeeee")
+        gs = self.fig.add_gridspec(2, 1, height_ratios=[3, 2], hspace=0.45)
+        self.ax = self.fig.add_subplot(gs[0])
+        self.ax2 = self.fig.add_subplot(gs[1])
+        for ax in (self.ax, self.ax2):
+            ax.set_facecolor("#2b2b2b")
+            ax.tick_params(colors="#cccccc", labelsize=8)
+            for spine in ax.spines.values():
+                spine.set_edgecolor("#555555")
+            ax.xaxis.label.set_color("#cccccc")
+            ax.yaxis.label.set_color("#cccccc")
+            ax.title.set_color("#eeeeee")
         self.fig.tight_layout(pad=2.0)
         self.draw()
 
@@ -53,10 +60,8 @@ class CamberCanvas(FigureCanvas):
         "seg1_p1",   # tip apex arm — both y and z
         "seg1_p2",   # tip junction arm — y only
         "seg1_p3",   # tip junction position — y only
-        "seg2_p1",   # camber rise arm from junction — y only
-        "seg2_p2",   # camber peak arm (rise side) — y only
+        "seg2_p1",   # camber rise arm from junction — y only (also controls peak arm)
         "seg2_p3",   # camber peak — z only
-        "seg3_p1",   # camber peak arm (fall side) — y only
         "seg3_p3",   # tail junction position — y only
         "seg4_p1",   # tail junction arm — y only
         "seg4_p2",   # tail apex arm — both y and z
@@ -117,17 +122,9 @@ class CamberCanvas(FigureCanvas):
             arm = float(np.clip(y_new - tip_junc, 1.0, half_span * 0.9))
             p.f_camber_arm.setText(f"{arm:.1f}")
 
-        elif self._drag_target == "seg2_p2":
-            arm = float(np.clip(center_y - y_new, 1.0, half_span * 0.9))
-            p.f_camber_peak_arm.setText(f"{arm:.1f}")
-
         elif self._drag_target == "seg2_p3":
             val = max(0.0, z_new)
             p.f_camber_amount.setText(f"{val:.1f}")
-
-        elif self._drag_target == "seg3_p1":
-            arm = float(np.clip(y_new - center_y, 1.0, half_span * 0.9))
-            p.f_camber_peak_arm.setText(f"{arm:.1f}")
 
         elif self._drag_target == "seg3_p3":
             val = float(np.clip(L - y_new, 10.0, L * 0.4))
@@ -187,23 +184,15 @@ class CamberCanvas(FigureCanvas):
             by, bz = cps[b_name]
             ax.plot([ay, by], [az, bz], color="#ff6633", lw=0.8, ls="--", alpha=0.7)
 
-        # ── Fixed endpoints (smaller circles) ────────────────────────────────
+        # ── Fixed endpoints (smaller circles, cyan) ──────────────────────────
         for name in ("seg1_p0", "seg4_p3"):
             py, pz = cps[name]
-            ax.plot(py, pz, "o", color="#ff6633", markersize=6, zorder=5)
+            ax.plot(py, pz, "o", color="#00cccc", markersize=8, zorder=5)
 
-        # ── Draggable control points (filled red circles) ─────────────────────
+        # ── Draggable control points (filled orange circles) ──────────────────
         for name in self._DRAGGABLE:
             py, pz = cps[name]
             ax.plot(py, pz, "o", color="#ff6633", markersize=7, zorder=6)
-
-        # Labels on key points
-        ax.annotate(f" {params.tip_rocker_height:.0f} mm", cps["seg1_p0"],
-                    fontsize=7, color="#aaaaaa", va="bottom")
-        ax.annotate(f" {params.camber_amount:.1f} mm", cps["seg2_p3"],
-                    fontsize=7, color="#aaaaaa", va="bottom")
-        ax.annotate(f" {params.tail_rocker_height:.0f} mm", cps["seg4_p3"],
-                    fontsize=7, color="#aaaaaa", va="bottom")
 
         ax.set_xlim(-50, L + 100)
         ax.set_ylim(-3, max(z_max * 1.2, 60))
@@ -215,6 +204,40 @@ class CamberCanvas(FigureCanvas):
                   ncol=2, facecolor="#333333", labelcolor="#dddddd")
 
         self.fig.tight_layout(pad=2.0)
+        self.draw()
+
+    def plot_distributions(self, result):
+        """Plot mass/EI/GJ distributions below the camber line."""
+        ax = self.ax2
+        ax.clear()
+        ax.set_facecolor("#2b2b2b")
+        ax.tick_params(colors="#cccccc", labelsize=8)
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#555555")
+        ax.xaxis.label.set_color("#cccccc")
+        ax.yaxis.label.set_color("#cccccc")
+        ax.title.set_color("#eeeeee")
+
+        y = result.y
+        # Plot EI and GJ on twin axes
+        ax.plot(y, result.EI / 1e6, color="#80c0ff", linewidth=1.5, label="EI (kN·m²×10³)")
+        ax2r = ax.twinx()
+        ax2r.tick_params(colors="#ffaa44", labelsize=8)
+        ax2r.plot(y, result.GJ / 1e6, color="#ffaa44", linewidth=1.5, linestyle="--", label="GJ (kN·m²×10³)")
+        ax2r.yaxis.label.set_color("#ffaa44")
+        ax2r.set_ylabel("GJ (N·m²)", color="#ffaa44")
+        ax2r.spines["right"].set_edgecolor("#ffaa44")
+
+        ax.set_xlabel("Along ski (mm)")
+        ax.set_ylabel("EI (N·mm²)", color="#80c0ff")
+        ax.set_title(f"Stiffness distributions  |  Total mass: {result.total_mass_g:.0f} g", color="#eeeeee")
+        ax.grid(True, alpha=0.2, color="#555555")
+
+        # Combined legend
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2r.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labels1 + labels2, fontsize=7, loc="upper right",
+                  facecolor="#333333", labelcolor="#dddddd")
         self.draw()
 
 
@@ -238,6 +261,9 @@ class CamberParameterPanel(QWidget):
         self._build_ui()
 
     def _build_ui(self):
+        db = MaterialDatabase()
+        self._db = db
+
         root = QVBoxLayout(self)
         root.setSpacing(6)
 
@@ -259,10 +285,8 @@ class CamberParameterPanel(QWidget):
         camber_lay = QFormLayout(camber_group)
         self.f_camber_amount = _FloatField(5.0)
         self.f_camber_arm = _FloatField(100.0)
-        self.f_camber_peak_arm = _FloatField(100.0)
         camber_lay.addRow("Camber height (mm):", self.f_camber_amount)
-        camber_lay.addRow("Junction arm (mm):", self.f_camber_arm)
-        camber_lay.addRow("Peak arm (mm):", self.f_camber_peak_arm)
+        camber_lay.addRow("Junction/peak arm (mm):", self.f_camber_arm)
         root.addWidget(camber_group)
 
         tail_group = QGroupBox("Tail Rocker")
@@ -278,6 +302,8 @@ class CamberParameterPanel(QWidget):
         tail_lay.addRow("Apex arm length (mm):", self.f_tail_apex_arm)
         tail_lay.addRow("Apex arm z-offset (mm):", self.f_tail_apex_arm_dz)
         root.addWidget(tail_group)
+
+        self._build_layup_ui(root, db)
 
         button_lay = QHBoxLayout()
         self.btn_load_params = QPushButton("Load params…")
@@ -302,7 +328,6 @@ class CamberParameterPanel(QWidget):
             tip_junc_arm=self.f_tip_junc_arm.value(),
             camber_amount=self.f_camber_amount.value(),
             camber_arm=self.f_camber_arm.value(),
-            camber_peak_arm=self.f_camber_peak_arm.value(),
             tail_junc_arm=self.f_tail_junc_arm.value(),
             tail_apex_arm=self.f_tail_apex_arm.value(),
             tail_apex_arm_dz=self.f_tail_apex_arm_dz.value(),
@@ -318,12 +343,144 @@ class CamberParameterPanel(QWidget):
         self.f_tip_junc_arm.setText(str(getattr(p, "tip_junc_arm", 40.0)))
         self.f_camber_amount.setText(str(p.camber_amount))
         self.f_camber_arm.setText(str(getattr(p, "camber_arm", 100.0)))
-        self.f_camber_peak_arm.setText(str(getattr(p, "camber_peak_arm", 100.0)))
         self.f_tail_junc_arm.setText(str(getattr(p, "tail_junc_arm", 40.0)))
         self.f_tail_apex_arm.setText(str(getattr(p, "tail_apex_arm", 50.0)))
         self.f_tail_apex_arm_dz.setText(str(getattr(p, "tail_apex_arm_dz", 0.0)))
         self.f_tail_length.setText(str(p.tail_rocker_length))
         self.f_tail_height.setText(str(p.tail_rocker_height))
+
+    def _build_layup_ui(self, root, db):
+        composite_names = ["(none)"] + db.names("composite")
+        core_names = db.names("wood_core")
+        base_names = db.names("base")
+        edge_names = db.names("edge")
+        sw_names = db.names("sidewall")
+
+        # ── Component materials ────────────────────────────────────────────────
+        comp_group = QGroupBox("Component Materials")
+        comp_lay = QFormLayout(comp_group)
+        self.cb_core = QComboBox()
+        self.cb_core.addItems(core_names)
+        self.cb_base = QComboBox()
+        self.cb_base.addItems(base_names)
+        self.cb_edge = QComboBox()
+        self.cb_edge.addItems(edge_names)
+        self.cb_sidewall = QComboBox()
+        self.cb_sidewall.addItems(sw_names)
+        comp_lay.addRow("Core wood:", self.cb_core)
+        comp_lay.addRow("Base:", self.cb_base)
+        comp_lay.addRow("Edge:", self.cb_edge)
+        comp_lay.addRow("Sidewall:", self.cb_sidewall)
+        root.addWidget(comp_group)
+
+        # ── Top laminate ──────────────────────────────────────────────────────
+        top_group = QGroupBox("Top Laminate")
+        top_lay = QFormLayout(top_group)
+        self.cb_top1_mat = QComboBox()
+        self.cb_top1_mat.addItems(composite_names)
+        self.f_top1_angle = _FloatField(0.0)
+        self.sb_top1_n = QSpinBox()
+        self.sb_top1_n.setRange(1, 8)
+        self.sb_top1_n.setValue(1)
+        top_row1 = QHBoxLayout()
+        top_row1.addWidget(self.cb_top1_mat)
+        top_row1.addWidget(QLabel("θ°:"))
+        top_row1.addWidget(self.f_top1_angle)
+        top_row1.addWidget(QLabel("n:"))
+        top_row1.addWidget(self.sb_top1_n)
+        top_lay.addRow("Layer 1:", top_row1)
+        self.chk_top2 = QCheckBox("Layer 2")
+        self.chk_top2.setChecked(False)
+        self.cb_top2_mat = QComboBox()
+        self.cb_top2_mat.addItems(composite_names)
+        self.f_top2_angle = _FloatField(45.0)
+        self.sb_top2_n = QSpinBox()
+        self.sb_top2_n.setRange(1, 8)
+        self.sb_top2_n.setValue(1)
+        top_row2 = QHBoxLayout()
+        top_row2.addWidget(self.chk_top2)
+        top_row2.addWidget(self.cb_top2_mat)
+        top_row2.addWidget(QLabel("θ°:"))
+        top_row2.addWidget(self.f_top2_angle)
+        top_row2.addWidget(QLabel("n:"))
+        top_row2.addWidget(self.sb_top2_n)
+        top_lay.addRow("", top_row2)
+        root.addWidget(top_group)
+
+        # ── Bottom laminate ────────────────────────────────────────────────────
+        bot_group = QGroupBox("Bottom Laminate")
+        bot_lay = QFormLayout(bot_group)
+        self.chk_mirror = QCheckBox("Mirror top laminate")
+        self.chk_mirror.setChecked(True)
+        bot_lay.addRow("", self.chk_mirror)
+        self.cb_bot1_mat = QComboBox()
+        self.cb_bot1_mat.addItems(composite_names)
+        self.f_bot1_angle = _FloatField(0.0)
+        self.sb_bot1_n = QSpinBox()
+        self.sb_bot1_n.setRange(1, 8)
+        self.sb_bot1_n.setValue(1)
+        bot_row1 = QHBoxLayout()
+        bot_row1.addWidget(self.cb_bot1_mat)
+        bot_row1.addWidget(QLabel("θ°:"))
+        bot_row1.addWidget(self.f_bot1_angle)
+        bot_row1.addWidget(QLabel("n:"))
+        bot_row1.addWidget(self.sb_bot1_n)
+        bot_lay.addRow("Layer 1:", bot_row1)
+        self.chk_bot2 = QCheckBox("Layer 2")
+        self.chk_bot2.setChecked(False)
+        self.cb_bot2_mat = QComboBox()
+        self.cb_bot2_mat.addItems(composite_names)
+        self.f_bot2_angle = _FloatField(45.0)
+        self.sb_bot2_n = QSpinBox()
+        self.sb_bot2_n.setRange(1, 8)
+        self.sb_bot2_n.setValue(1)
+        bot_row2 = QHBoxLayout()
+        bot_row2.addWidget(self.chk_bot2)
+        bot_row2.addWidget(self.cb_bot2_mat)
+        bot_row2.addWidget(QLabel("θ°:"))
+        bot_row2.addWidget(self.f_bot2_angle)
+        bot_row2.addWidget(QLabel("n:"))
+        bot_row2.addWidget(self.sb_bot2_n)
+        bot_lay.addRow("", bot_row2)
+        root.addWidget(bot_group)
+
+        # Toggle bottom widgets visibility with mirror checkbox
+        def _toggle_mirror(checked):
+            for w in (self.cb_bot1_mat, self.f_bot1_angle, self.sb_bot1_n,
+                      self.chk_bot2, self.cb_bot2_mat, self.f_bot2_angle, self.sb_bot2_n):
+                w.setVisible(not checked)
+        self.chk_mirror.toggled.connect(_toggle_mirror)
+        _toggle_mirror(True)
+
+        # Calc button
+        self.btn_calc_mechanics = QPushButton("Calculate mass & stiffness")
+        root.addWidget(self.btn_calc_mechanics)
+        self.lbl_mass = QLabel("Mass: —")
+        self.lbl_mass.setStyleSheet("color: #aaaaaa;")
+        root.addWidget(self.lbl_mass)
+
+    def get_layup(self) -> LayupConfig:
+        def _ply(cb_mat, f_angle, sb_n, enabled=True) -> PlyCfg:
+            name = cb_mat.currentText()
+            if name == "(none)":
+                name = ""
+            return PlyCfg(name, f_angle.value(), sb_n.value(), enabled)
+
+        top = [_ply(self.cb_top1_mat, self.f_top1_angle, self.sb_top1_n)]
+        if self.chk_top2.isChecked():
+            top.append(_ply(self.cb_top2_mat, self.f_top2_angle, self.sb_top2_n))
+        bot = [_ply(self.cb_bot1_mat, self.f_bot1_angle, self.sb_bot1_n)]
+        if self.chk_bot2.isChecked():
+            bot.append(_ply(self.cb_bot2_mat, self.f_bot2_angle, self.sb_bot2_n))
+        return LayupConfig(
+            top_layers=top,
+            bottom_layers=bot,
+            mirror_bottom=self.chk_mirror.isChecked(),
+            core_material=self.cb_core.currentText(),
+            base_material=self.cb_base.currentText(),
+            edge_material=self.cb_edge.currentText(),
+            sidewall_material=self.cb_sidewall.currentText(),
+        )
 
 
 # ── Tab widget ────────────────────────────────────────────────────────────────
@@ -332,6 +489,8 @@ class CamberTab(QWidget):
     def __init__(self, ski_length: float = 1800.0):
         super().__init__()
         self._ski_length = ski_length
+        self._geom = None
+        self._core_params = None
         self._build_ui()
         self._connect_signals()
         self._update_preview()
@@ -365,15 +524,46 @@ class CamberTab(QWidget):
             self.panel.f_tip_junc_arm,
             self.panel.f_camber_amount,
             self.panel.f_camber_arm,
-            self.panel.f_camber_peak_arm,
             self.panel.f_tail_junc_arm,
             self.panel.f_tail_apex_arm,
             self.panel.f_tail_apex_arm_dz,
             self.panel.f_tail_length,
             self.panel.f_tail_height,
+            self.panel.f_top1_angle,
+            self.panel.f_top2_angle,
+            self.panel.f_bot1_angle,
+            self.panel.f_bot2_angle,
         ):
             field.textChanged.connect(self._update_preview)
 
+        for cb in (
+            self.panel.cb_core,
+            self.panel.cb_base,
+            self.panel.cb_edge,
+            self.panel.cb_sidewall,
+            self.panel.cb_top1_mat,
+            self.panel.cb_top2_mat,
+            self.panel.cb_bot1_mat,
+            self.panel.cb_bot2_mat,
+        ):
+            cb.currentIndexChanged.connect(self._update_preview)
+
+        for sb in (
+            self.panel.sb_top1_n,
+            self.panel.sb_top2_n,
+            self.panel.sb_bot1_n,
+            self.panel.sb_bot2_n,
+        ):
+            sb.valueChanged.connect(self._update_preview)
+
+        for chk in (
+            self.panel.chk_top2,
+            self.panel.chk_bot2,
+            self.panel.chk_mirror,
+        ):
+            chk.toggled.connect(self._update_preview)
+
+        self.panel.btn_calc_mechanics.clicked.connect(self._update_preview)
         self.panel.btn_load_params.clicked.connect(self._load_params)
         self.panel.btn_save_params.clicked.connect(self._save_params)
         self._load_ski_callback = None
@@ -389,6 +579,11 @@ class CamberTab(QWidget):
         self._ski_length = ski_length
         self._update_preview()
 
+    def set_geometry(self, geom, core_params):
+        self._geom = geom
+        self._core_params = core_params
+        self._update_preview()
+
     def _update_preview(self):
         try:
             params = self.panel.get_params()
@@ -398,6 +593,16 @@ class CamberTab(QWidget):
         except Exception as e:
             self.panel.lbl_status.setText(f"✗ Error: {str(e)}")
             self.panel.lbl_status.setStyleSheet("color: #ff6060;")
+            return
+        if self._geom is not None:
+            try:
+                db = self.panel._db
+                layup = self.panel.get_layup()
+                result = compute_mechanics(self._geom, self._core_params, layup, db)
+                self.canvas.plot_distributions(result)
+                self.panel.lbl_mass.setText(f"Total mass: {result.total_mass_g:.0f} g")
+            except Exception:
+                pass  # Don't fail the preview if mechanics fails
 
     def _load_params(self):
         if self._load_ski_callback is not None:

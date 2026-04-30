@@ -1,10 +1,9 @@
 """Base material design: metal edge layout, step cutouts, and G-code."""
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 import json
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 

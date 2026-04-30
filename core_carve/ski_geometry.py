@@ -176,7 +176,7 @@ def _sample_arc(arc_entity, n_points: int = 100) -> np.ndarray:
         y = center[1] + radius * np.sin(angles)
         pts = np.column_stack([x, y])
         return pts
-    except Exception as e:
+    except Exception:
         return np.empty((0, 2))
 
 

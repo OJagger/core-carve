@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QPushButton, QLabel, QLineEdit, QGroupBox, QFormLayout,
@@ -31,7 +30,6 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.patches as patches
 import matplotlib.cm as cm
-from mpl_toolkits.mplot3d import Axes3D
 
 from core_carve.profile_generator import ProfileParams, generate_profile_gcode
 from core_carve.ski_geometry import SkiGeometry

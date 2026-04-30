@@ -1,7 +1,6 @@
 """Tab 1 — Ski Geometry: DXF planform input, parameter entry, and visualisation."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +13,6 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-import matplotlib.patches as mpatches
 
 from core_carve.ski_geometry import (
     SkiParams, SkiGeometry, load_planform_dxf, compute_geometry, half_widths_at_y

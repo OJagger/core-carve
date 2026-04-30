@@ -1,7 +1,7 @@
 import json
 import sys
 from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QFileDialog, QMessageBox
-from PyQt5.QtCore import Qt, QObject
+from PyQt5.QtCore import Qt
 
 from core_carve.tab_design import DesignTab
 from core_carve.tab_base import BaseTab
@@ -151,6 +151,7 @@ class MainWindow(QMainWindow):
             self._check_geometry_loaded()
             if self.geometry_tab._geom is not None:
                 self.camber_tab.set_ski_length(self.geometry_tab._geom.ski_length)
+                self.camber_tab.set_geometry(self.geometry_tab._geom, self.geometry_tab.panel.get_params())
 
             return True
         except Exception as e:
@@ -176,6 +177,7 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(self.gcode_tab, "Sidewall slot machining")
             self.profile_tab = ProfileTab(self.geometry_tab._geom, params, self.blank_tab)
             self.tabs.addTab(self.profile_tab, "Core profiling")
+            self.camber_tab.set_geometry(self.geometry_tab._geom, self.geometry_tab.panel.get_params())
             # Register late-created splitters and sync them to the current ratio
             for new_tab in (self.blank_tab, self.gcode_tab, self.profile_tab):
                 s = new_tab.splitter
@@ -201,6 +203,7 @@ class MainWindow(QMainWindow):
             self.profile_tab.geom = self.geometry_tab._geom
             self.profile_tab.params = params
             self.camber_tab.set_ski_length(self.geometry_tab._geom.ski_length)
+            self.camber_tab.set_geometry(self.geometry_tab._geom, self.geometry_tab.panel.get_params())
 
 
 def main():

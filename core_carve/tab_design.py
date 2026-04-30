@@ -7,7 +7,7 @@ from typing import Callable, Optional
 import numpy as np
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
-    QPushButton, QLabel, QLineEdit, QGroupBox,
+    QPushButton, QLineEdit, QGroupBox,
     QFormLayout, QFileDialog, QScrollArea, QSizePolicy,
     QFrame,
 )
@@ -255,8 +255,6 @@ class DesignPanel(QWidget):
 
     def _load_defaults_from_file(self):
         """Load default values from data/ski.json if available."""
-        import json
-        from pathlib import Path
         ski_file = Path(__file__).parent.parent / "data" / "ski.json"
         # Use ski.json values as defaults (from ski.json hardcoded)
         self._defaults = {
