@@ -7,6 +7,7 @@ from core_carve.tab_design import DesignTab
 from core_carve.tab_base import BaseTab
 from core_carve.tab_geometry import GeometryTab
 from core_carve.tab_camber import CamberTab
+from core_carve.tab_materials import MaterialsTab
 from core_carve.tab_blank import BlankTab
 from core_carve.tab_gcode import GcodeTab
 from core_carve.tab_profile import ProfileTab
@@ -42,6 +43,9 @@ class MainWindow(QMainWindow):
         self.camber_tab.set_load_ski_callback(self._load_ski_definition)
         self.camber_tab.set_save_ski_callback(self._save_ski_file)
 
+        self.materials_tab = MaterialsTab()
+        self.tabs.addTab(self.materials_tab, "Materials & Stiffness")
+
         # Blank, G-code, and Profile tabs (created when geometry is loaded)
         self.blank_tab = None
         self.gcode_tab = None
@@ -53,6 +57,7 @@ class MainWindow(QMainWindow):
             self.base_tab.splitter,
             self.geometry_tab.splitter,
             self.camber_tab.splitter,
+            self.materials_tab.splitter,
         ]
         self._viz_splitters = [s for s in self._viz_splitters if s is not None]
         self._syncing_splitters = False
@@ -178,6 +183,7 @@ class MainWindow(QMainWindow):
             self.profile_tab = ProfileTab(self.geometry_tab._geom, params, self.blank_tab)
             self.tabs.addTab(self.profile_tab, "Core profiling")
             self.camber_tab.set_geometry(self.geometry_tab._geom, self.geometry_tab.panel.get_params())
+            self.materials_tab.set_geometry(self.geometry_tab._geom, self.geometry_tab.panel.get_params())
             # Register late-created splitters and sync them to the current ratio
             for new_tab in (self.blank_tab, self.gcode_tab, self.profile_tab):
                 s = new_tab.splitter
@@ -204,6 +210,7 @@ class MainWindow(QMainWindow):
             self.profile_tab.params = params
             self.camber_tab.set_ski_length(self.geometry_tab._geom.ski_length)
             self.camber_tab.set_geometry(self.geometry_tab._geom, self.geometry_tab.panel.get_params())
+            self.materials_tab.set_geometry(self.geometry_tab._geom, self.geometry_tab.panel.get_params())
 
 
 def main():

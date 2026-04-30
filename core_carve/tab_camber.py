@@ -15,8 +15,6 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from core_carve.camber_design import CamberParams, compute_camber_line, bezier_control_points
-from core_carve.materials import MaterialDatabase
-from core_carve.ski_mechanics import LayupConfig, PlyCfg, compute_mechanics
 
 
 # ── Canvas ────────────────────────────────────────────────────────────────────
@@ -261,9 +259,6 @@ class CamberParameterPanel(QWidget):
         self._build_ui()
 
     def _build_ui(self):
-        db = MaterialDatabase()
-        self._db = db
-
         root = QVBoxLayout(self)
         root.setSpacing(6)
 
@@ -302,8 +297,6 @@ class CamberParameterPanel(QWidget):
         tail_lay.addRow("Apex arm length (mm):", self.f_tail_apex_arm)
         tail_lay.addRow("Apex arm z-offset (mm):", self.f_tail_apex_arm_dz)
         root.addWidget(tail_group)
-
-        self._build_layup_ui(root, db)
 
         button_lay = QHBoxLayout()
         self.btn_load_params = QPushButton("Load params…")
@@ -349,138 +342,6 @@ class CamberParameterPanel(QWidget):
         self.f_tail_length.setText(str(p.tail_rocker_length))
         self.f_tail_height.setText(str(p.tail_rocker_height))
 
-    def _build_layup_ui(self, root, db):
-        composite_names = ["(none)"] + db.names("composite")
-        core_names = db.names("wood_core")
-        base_names = db.names("base")
-        edge_names = db.names("edge")
-        sw_names = db.names("sidewall")
-
-        # ── Component materials ────────────────────────────────────────────────
-        comp_group = QGroupBox("Component Materials")
-        comp_lay = QFormLayout(comp_group)
-        self.cb_core = QComboBox()
-        self.cb_core.addItems(core_names)
-        self.cb_base = QComboBox()
-        self.cb_base.addItems(base_names)
-        self.cb_edge = QComboBox()
-        self.cb_edge.addItems(edge_names)
-        self.cb_sidewall = QComboBox()
-        self.cb_sidewall.addItems(sw_names)
-        comp_lay.addRow("Core wood:", self.cb_core)
-        comp_lay.addRow("Base:", self.cb_base)
-        comp_lay.addRow("Edge:", self.cb_edge)
-        comp_lay.addRow("Sidewall:", self.cb_sidewall)
-        root.addWidget(comp_group)
-
-        # ── Top laminate ──────────────────────────────────────────────────────
-        top_group = QGroupBox("Top Laminate")
-        top_lay = QFormLayout(top_group)
-        self.cb_top1_mat = QComboBox()
-        self.cb_top1_mat.addItems(composite_names)
-        self.f_top1_angle = _FloatField(0.0)
-        self.sb_top1_n = QSpinBox()
-        self.sb_top1_n.setRange(1, 8)
-        self.sb_top1_n.setValue(1)
-        top_row1 = QHBoxLayout()
-        top_row1.addWidget(self.cb_top1_mat)
-        top_row1.addWidget(QLabel("θ°:"))
-        top_row1.addWidget(self.f_top1_angle)
-        top_row1.addWidget(QLabel("n:"))
-        top_row1.addWidget(self.sb_top1_n)
-        top_lay.addRow("Layer 1:", top_row1)
-        self.chk_top2 = QCheckBox("Layer 2")
-        self.chk_top2.setChecked(False)
-        self.cb_top2_mat = QComboBox()
-        self.cb_top2_mat.addItems(composite_names)
-        self.f_top2_angle = _FloatField(45.0)
-        self.sb_top2_n = QSpinBox()
-        self.sb_top2_n.setRange(1, 8)
-        self.sb_top2_n.setValue(1)
-        top_row2 = QHBoxLayout()
-        top_row2.addWidget(self.chk_top2)
-        top_row2.addWidget(self.cb_top2_mat)
-        top_row2.addWidget(QLabel("θ°:"))
-        top_row2.addWidget(self.f_top2_angle)
-        top_row2.addWidget(QLabel("n:"))
-        top_row2.addWidget(self.sb_top2_n)
-        top_lay.addRow("", top_row2)
-        root.addWidget(top_group)
-
-        # ── Bottom laminate ────────────────────────────────────────────────────
-        bot_group = QGroupBox("Bottom Laminate")
-        bot_lay = QFormLayout(bot_group)
-        self.chk_mirror = QCheckBox("Mirror top laminate")
-        self.chk_mirror.setChecked(True)
-        bot_lay.addRow("", self.chk_mirror)
-        self.cb_bot1_mat = QComboBox()
-        self.cb_bot1_mat.addItems(composite_names)
-        self.f_bot1_angle = _FloatField(0.0)
-        self.sb_bot1_n = QSpinBox()
-        self.sb_bot1_n.setRange(1, 8)
-        self.sb_bot1_n.setValue(1)
-        bot_row1 = QHBoxLayout()
-        bot_row1.addWidget(self.cb_bot1_mat)
-        bot_row1.addWidget(QLabel("θ°:"))
-        bot_row1.addWidget(self.f_bot1_angle)
-        bot_row1.addWidget(QLabel("n:"))
-        bot_row1.addWidget(self.sb_bot1_n)
-        bot_lay.addRow("Layer 1:", bot_row1)
-        self.chk_bot2 = QCheckBox("Layer 2")
-        self.chk_bot2.setChecked(False)
-        self.cb_bot2_mat = QComboBox()
-        self.cb_bot2_mat.addItems(composite_names)
-        self.f_bot2_angle = _FloatField(45.0)
-        self.sb_bot2_n = QSpinBox()
-        self.sb_bot2_n.setRange(1, 8)
-        self.sb_bot2_n.setValue(1)
-        bot_row2 = QHBoxLayout()
-        bot_row2.addWidget(self.chk_bot2)
-        bot_row2.addWidget(self.cb_bot2_mat)
-        bot_row2.addWidget(QLabel("θ°:"))
-        bot_row2.addWidget(self.f_bot2_angle)
-        bot_row2.addWidget(QLabel("n:"))
-        bot_row2.addWidget(self.sb_bot2_n)
-        bot_lay.addRow("", bot_row2)
-        root.addWidget(bot_group)
-
-        # Toggle bottom widgets visibility with mirror checkbox
-        def _toggle_mirror(checked):
-            for w in (self.cb_bot1_mat, self.f_bot1_angle, self.sb_bot1_n,
-                      self.chk_bot2, self.cb_bot2_mat, self.f_bot2_angle, self.sb_bot2_n):
-                w.setVisible(not checked)
-        self.chk_mirror.toggled.connect(_toggle_mirror)
-        _toggle_mirror(True)
-
-        # Calc button
-        self.btn_calc_mechanics = QPushButton("Calculate mass & stiffness")
-        root.addWidget(self.btn_calc_mechanics)
-        self.lbl_mass = QLabel("Mass: —")
-        self.lbl_mass.setStyleSheet("color: #aaaaaa;")
-        root.addWidget(self.lbl_mass)
-
-    def get_layup(self) -> LayupConfig:
-        def _ply(cb_mat, f_angle, sb_n, enabled=True) -> PlyCfg:
-            name = cb_mat.currentText()
-            if name == "(none)":
-                name = ""
-            return PlyCfg(name, f_angle.value(), sb_n.value(), enabled)
-
-        top = [_ply(self.cb_top1_mat, self.f_top1_angle, self.sb_top1_n)]
-        if self.chk_top2.isChecked():
-            top.append(_ply(self.cb_top2_mat, self.f_top2_angle, self.sb_top2_n))
-        bot = [_ply(self.cb_bot1_mat, self.f_bot1_angle, self.sb_bot1_n)]
-        if self.chk_bot2.isChecked():
-            bot.append(_ply(self.cb_bot2_mat, self.f_bot2_angle, self.sb_bot2_n))
-        return LayupConfig(
-            top_layers=top,
-            bottom_layers=bot,
-            mirror_bottom=self.chk_mirror.isChecked(),
-            core_material=self.cb_core.currentText(),
-            base_material=self.cb_base.currentText(),
-            edge_material=self.cb_edge.currentText(),
-            sidewall_material=self.cb_sidewall.currentText(),
-        )
 
 
 # ── Tab widget ────────────────────────────────────────────────────────────────
@@ -529,41 +390,9 @@ class CamberTab(QWidget):
             self.panel.f_tail_apex_arm_dz,
             self.panel.f_tail_length,
             self.panel.f_tail_height,
-            self.panel.f_top1_angle,
-            self.panel.f_top2_angle,
-            self.panel.f_bot1_angle,
-            self.panel.f_bot2_angle,
         ):
             field.textChanged.connect(self._update_preview)
 
-        for cb in (
-            self.panel.cb_core,
-            self.panel.cb_base,
-            self.panel.cb_edge,
-            self.panel.cb_sidewall,
-            self.panel.cb_top1_mat,
-            self.panel.cb_top2_mat,
-            self.panel.cb_bot1_mat,
-            self.panel.cb_bot2_mat,
-        ):
-            cb.currentIndexChanged.connect(self._update_preview)
-
-        for sb in (
-            self.panel.sb_top1_n,
-            self.panel.sb_top2_n,
-            self.panel.sb_bot1_n,
-            self.panel.sb_bot2_n,
-        ):
-            sb.valueChanged.connect(self._update_preview)
-
-        for chk in (
-            self.panel.chk_top2,
-            self.panel.chk_bot2,
-            self.panel.chk_mirror,
-        ):
-            chk.toggled.connect(self._update_preview)
-
-        self.panel.btn_calc_mechanics.clicked.connect(self._update_preview)
         self.panel.btn_load_params.clicked.connect(self._load_params)
         self.panel.btn_save_params.clicked.connect(self._save_params)
         self._load_ski_callback = None
@@ -593,16 +422,6 @@ class CamberTab(QWidget):
         except Exception as e:
             self.panel.lbl_status.setText(f"✗ Error: {str(e)}")
             self.panel.lbl_status.setStyleSheet("color: #ff6060;")
-            return
-        if self._geom is not None:
-            try:
-                db = self.panel._db
-                layup = self.panel.get_layup()
-                result = compute_mechanics(self._geom, self._core_params, layup, db)
-                self.canvas.plot_distributions(result)
-                self.panel.lbl_mass.setText(f"Total mass: {result.total_mass_g:.0f} g")
-            except Exception:
-                pass  # Don't fail the preview if mechanics fails
 
     def _load_params(self):
         if self._load_ski_callback is not None:
