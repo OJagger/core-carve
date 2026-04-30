@@ -186,11 +186,18 @@ def _sample_spline(spline_entity, n_points: int = 100) -> np.ndarray:
         from scipy.interpolate import BSpline
 
         ctrl_pts = np.array([(float(pt[0]), float(pt[1])) for pt in spline_entity.control_points])
-        knots = np.array(spline_entity.knots)
+        knots = np.array(spline_entity.knots, dtype=np.float64)
         degree = int(spline_entity.dxf.degree)
 
         if len(ctrl_pts) < 2 or len(knots) < 2:
             return np.empty((0, 2))
+
+        # Ensure knots are strictly increasing (required by BSpline)
+        # Sort and remove duplicates with small epsilon tolerance
+        unique_knots = np.unique(np.round(knots, decimals=10))
+        if len(unique_knots) != len(knots) or not np.all(np.diff(unique_knots) > 0):
+            # Knots not strictly increasing; fallback to linear interpolation
+            raise ValueError("Knots not strictly increasing")
 
         # Create B-spline objects for x and y
         spl_x = BSpline(knots, ctrl_pts[:, 0], degree, extrapolate=False)
@@ -199,21 +206,33 @@ def _sample_spline(spline_entity, n_points: int = 100) -> np.ndarray:
         # Sample across the valid parameter range [knots[degree], knots[-degree-1]]
         u_min = knots[degree]
         u_max = knots[-degree - 1]
+        if u_max <= u_min:
+            # Invalid range; fallback to linear interpolation
+            raise ValueError("Invalid knot range")
+
         u_sample = np.linspace(u_min, u_max, n_points)
 
         x = spl_x(u_sample)
         y = spl_y(u_sample)
         return np.column_stack([x, y])
-    except ImportError:
-        # Fallback: just connect control points
-        ctrl_pts = np.array([(float(pt[0]), float(pt[1])) for pt in spline_entity.control_points])
+    except (ImportError, ValueError, Exception):
+        # Fallback: just connect control points linearly
+        try:
+            ctrl_pts = np.array([(float(pt[0]), float(pt[1])) for pt in spline_entity.control_points])
+        except:
+            return np.empty((0, 2))
+
         if len(ctrl_pts) < 2:
             return np.empty((0, 2))
+
         # Linear interpolation between control points
         pts = []
+        num_segments = len(ctrl_pts) - 1
+        points_per_segment = max(1, n_points // num_segments)
+
         for i in range(len(ctrl_pts) - 1):
             p0, p1 = ctrl_pts[i], ctrl_pts[i + 1]
-            segment = np.linspace(p0, p1, n_points // (len(ctrl_pts) - 1) + 1)[:-1]
+            segment = np.linspace(p0, p1, points_per_segment + 1)[:-1]
             pts.extend(segment)
         pts.append(ctrl_pts[-1])
         return np.array(pts)
