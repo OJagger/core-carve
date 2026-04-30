@@ -15,6 +15,9 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
 from core_carve.camber_design import CamberParams, compute_camber_line, bezier_control_points
+from core_carve.ski_mould import compute_mould_section, write_mould_dxf, generate_mould_gcode
+from core_carve.gcode_generator import SlotParams
+from core_carve.materials import MaterialDatabase
 
 
 # ── Canvas ────────────────────────────────────────────────────────────────────
@@ -37,18 +40,19 @@ class CamberCanvas(FigureCanvas):
 
     def _setup_axes(self):
         self.fig.clear()
-        gs = self.fig.add_gridspec(2, 1, height_ratios=[3, 2], hspace=0.45)
+        gs = self.fig.add_gridspec(3, 1, height_ratios=[2, 1.5, 1.5], hspace=0.4)
         self.ax = self.fig.add_subplot(gs[0])
         self.ax2 = self.fig.add_subplot(gs[1])
-        for ax in (self.ax, self.ax2):
+        self.ax3 = self.fig.add_subplot(gs[2])
+        for ax in (self.ax, self.ax2, self.ax3):
             ax.set_facecolor("#2b2b2b")
-            ax.tick_params(colors="#cccccc", labelsize=8)
+            ax.tick_params(colors="#cccccc", labelsize=7)
             for spine in ax.spines.values():
                 spine.set_edgecolor("#555555")
             ax.xaxis.label.set_color("#cccccc")
             ax.yaxis.label.set_color("#cccccc")
             ax.title.set_color("#eeeeee")
-        self.fig.tight_layout(pad=2.0)
+        self.fig.tight_layout(pad=1.5)
         self.draw()
 
     # ── Drag logic ────────────────────────────────────────────────────────────
@@ -238,6 +242,48 @@ class CamberCanvas(FigureCanvas):
                   facecolor="#333333", labelcolor="#dddddd")
         self.draw()
 
+    def plot_mould_section(self, y_pos, geom, core_params, materials_db, layup, topsheet_mass):
+        """Plot mould cross-section at position y along ski."""
+        if geom is None or materials_db is None:
+            self.ax3.clear()
+            self.ax3.text(0.5, 0.5, "Load geometry to view mould", ha="center", va="center",
+                         transform=self.ax3.transAxes, color="#aaaaaa")
+            self.draw()
+            return
+
+        try:
+            outline, layers = compute_mould_section(y_pos, geom, core_params, materials_db, layup, topsheet_mass)
+
+            self.ax3.clear()
+            self.ax3.set_facecolor("#2b2b2b")
+            self.ax3.tick_params(colors="#cccccc", labelsize=7)
+            for spine in self.ax3.spines.values():
+                spine.set_edgecolor("#555555")
+
+            if outline:
+                # Draw outline
+                xs, zs = zip(*outline)
+                self.ax3.fill(xs, zs, color="#444444", alpha=0.6, edgecolor="#cccccc", linewidth=1.5)
+
+                # Draw layers with colors
+                z_pos = 0
+                for layer in layers:
+                    self.ax3.axhline(y=z_pos + layer.thickness, color=layer.color, linewidth=0.8, alpha=0.5, linestyle="--")
+                    z_pos += layer.thickness
+
+            self.ax3.set_xlabel("Width (mm)", color="#cccccc")
+            self.ax3.set_ylabel("Height (mm)", color="#cccccc")
+            y_label = "Tip" if y_pos < geom.core_tip_x + 100 else "Waist" if y_pos < geom.waist_x + 100 else "Tail"
+            self.ax3.set_title(f"Mould section at {y_label} (Y={y_pos:.0f} mm)", color="#eeeeee")
+            self.ax3.grid(True, alpha=0.2, color="#555555")
+            self.ax3.set_aspect("equal")
+            self.draw()
+        except Exception as e:
+            self.ax3.clear()
+            self.ax3.text(0.5, 0.5, f"Error: {str(e)[:50]}", ha="center", va="center",
+                         transform=self.ax3.transAxes, color="#ff6060", fontsize=8)
+            self.draw()
+
 
 # ── Parameter panel ──────────────────────────────────────────────────────────
 
@@ -297,6 +343,20 @@ class CamberParameterPanel(QWidget):
         tail_lay.addRow("Apex arm length (mm):", self.f_tail_apex_arm)
         tail_lay.addRow("Apex arm z-offset (mm):", self.f_tail_apex_arm_dz)
         root.addWidget(tail_group)
+
+        # Mould controls
+        mould_group = QGroupBox("Mould Cross-Section")
+        mould_lay = QFormLayout(mould_group)
+        self.sb_mould_y = QSpinBox()
+        self.sb_mould_y.setRange(0, 1800)
+        self.sb_mould_y.setValue(900)
+        self.sb_mould_y.setSuffix(" mm")
+        mould_lay.addRow("Position along ski:", self.sb_mould_y)
+        self.btn_export_dxf = QPushButton("Export mould to DXF")
+        self.btn_generate_gcode = QPushButton("Generate mould G-code")
+        mould_lay.addRow(self.btn_export_dxf)
+        mould_lay.addRow(self.btn_generate_gcode)
+        root.addWidget(mould_group)
 
         button_lay = QHBoxLayout()
         self.btn_load_params = QPushButton("Load params…")
@@ -393,10 +453,14 @@ class CamberTab(QWidget):
         ):
             field.textChanged.connect(self._update_preview)
 
+        self.panel.sb_mould_y.valueChanged.connect(self._update_mould)
+        self.panel.btn_export_dxf.clicked.connect(self._export_mould_dxf)
+        self.panel.btn_generate_gcode.clicked.connect(self._generate_mould_gcode)
         self.panel.btn_load_params.clicked.connect(self._load_params)
         self.panel.btn_save_params.clicked.connect(self._save_params)
         self._load_ski_callback = None
         self._save_ski_callback = None
+        self._materials_db = MaterialDatabase()
 
     def set_load_ski_callback(self, fn):
         self._load_ski_callback = fn
@@ -417,6 +481,7 @@ class CamberTab(QWidget):
         try:
             params = self.panel.get_params()
             self.canvas.plot_camber(params, self._ski_length)
+            self._update_mould()
             self.panel.lbl_status.setText("✓ Camber design ready")
             self.panel.lbl_status.setStyleSheet("color: #60cc60;")
         except Exception as e:
@@ -458,3 +523,105 @@ class CamberTab(QWidget):
             QMessageBox.information(self, "Saved", f"Parameters saved to {Path(path).name}")
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
+
+    def _update_mould(self):
+        """Update mould visualization when position changes."""
+        if self._geom is None:
+            return
+        try:
+            y_pos = float(self.panel.sb_mould_y.value())
+            # Create a dummy layup for visualization if materials tab not available
+            from core_carve.ski_mechanics import LayupConfig, PlyCfg
+            layup = LayupConfig(
+                top_layers=[PlyCfg("E-glass UD 300", 0.0, 1)],
+                bottom_layers=[PlyCfg("E-glass UD 300", 0.0, 1)],
+                mirror_bottom=True,
+                core_material="Paulownia",
+                base_material="PTEX 2000",
+                edge_material="Steel edge",
+                sidewall_material="UHMWPE sidewall",
+            )
+            self.canvas.plot_mould_section(y_pos, self._geom, self._core_params,
+                                          self._materials_db, layup, 50.0)
+        except Exception as e:
+            pass
+
+    def _export_mould_dxf(self):
+        """Export mould cross-section to DXF file."""
+        if self._geom is None:
+            QMessageBox.warning(self, "No Geometry", "Load geometry first")
+            return
+        try:
+            from core_carve.ski_mechanics import LayupConfig, PlyCfg
+            y_pos = float(self.panel.sb_mould_y.value())
+            layup = LayupConfig(
+                top_layers=[PlyCfg("E-glass UD 300", 0.0, 1)],
+                bottom_layers=[PlyCfg("E-glass UD 300", 0.0, 1)],
+                mirror_bottom=True,
+                core_material="Paulownia",
+                base_material="PTEX 2000",
+                edge_material="Steel edge",
+                sidewall_material="UHMWPE sidewall",
+            )
+            outline, _ = compute_mould_section(y_pos, self._geom, self._core_params,
+                                               self._materials_db, layup, 50.0)
+            if not outline:
+                QMessageBox.warning(self, "Empty Section", "No outline at this position")
+                return
+
+            # Suggest a filename based on position
+            y_label = "tip" if y_pos < self._geom.core_tip_x + 100 else "waist" if y_pos < self._geom.waist_x + 100 else "tail"
+            default_name = f"mould_{y_label}_{y_pos:.0f}.dxf"
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Export Mould DXF", default_name,
+                "DXF Files (*.dxf);;All Files (*)"
+            )
+            if not path:
+                return
+            write_mould_dxf(outline, path)
+            QMessageBox.information(self, "Exported", f"Mould DXF saved to {Path(path).name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Error", str(e))
+
+    def _generate_mould_gcode(self):
+        """Generate G-code to cut mould profile."""
+        if self._geom is None:
+            QMessageBox.warning(self, "No Geometry", "Load geometry first")
+            return
+        try:
+            from core_carve.ski_mechanics import LayupConfig, PlyCfg
+            y_pos = float(self.panel.sb_mould_y.value())
+            layup = LayupConfig(
+                top_layers=[PlyCfg("E-glass UD 300", 0.0, 1)],
+                bottom_layers=[PlyCfg("E-glass UD 300", 0.0, 1)],
+                mirror_bottom=True,
+                core_material="Paulownia",
+                base_material="PTEX 2000",
+                edge_material="Steel edge",
+                sidewall_material="UHMWPE sidewall",
+            )
+            outline, _ = compute_mould_section(y_pos, self._geom, self._core_params,
+                                               self._materials_db, layup, 50.0)
+            if not outline:
+                QMessageBox.warning(self, "Empty Section", "No outline at this position")
+                return
+
+            # Generate G-code
+            slot_params = SlotParams(depth_per_pass=2.0, cutting_feed=500.0,
+                                    plunge_feed=100.0, spindle_speed=10000)
+            gcode = generate_mould_gcode(outline, slot_params)
+
+            # Save G-code
+            y_label = "tip" if y_pos < self._geom.core_tip_x + 100 else "waist" if y_pos < self._geom.waist_x + 100 else "tail"
+            default_name = f"mould_{y_label}_{y_pos:.0f}.nc"
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save Mould G-code", default_name,
+                "NC Files (*.nc);;Text Files (*.txt);;All Files (*)"
+            )
+            if not path:
+                return
+            with open(path, "w") as f:
+                f.write(gcode)
+            QMessageBox.information(self, "Generated", f"Mould G-code saved to {Path(path).name}")
+        except Exception as e:
+            QMessageBox.critical(self, "Generation Error", str(e))
