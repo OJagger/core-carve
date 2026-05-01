@@ -71,17 +71,46 @@ class GcodeCanvas(FigureCanvas):
         self.fig.tight_layout(pad=2.0)
         self.draw()
 
+    def _transform_to_machine(self, x, y):
+        """Transform blank-space coords to machine coords based on blank settings."""
+        if not self._blank:
+            return x, y
+
+        from core_carve.core_blank import MachineOrientation, OriginCorner
+
+        # Swap axes if ski runs along Y
+        if self._blank.machine_orientation == MachineOrientation.Y_AXIS:
+            x, y = y, x
+
+        # Shift based on origin corner
+        if self._blank.origin_corner == OriginCorner.TOP_LEFT:
+            y = y - self._blank.width
+        elif self._blank.origin_corner == OriginCorner.TOP_RIGHT:
+            x = x - self._blank.length
+            y = y - self._blank.width
+        elif self._blank.origin_corner == OriginCorner.BOTTOM_RIGHT:
+            x = x - self._blank.length
+
+        return x, y
+
     def plot_slot_preview(self, blank, geom, params, slot_params, x_offset=0.0):
-        """Show blank and slot outlines."""
+        """Show blank and slot outlines in machine coordinates."""
         self._setup_axes()
+        self._blank = blank
         ax = self.ax
 
-        # Blank outline
-        rect_blank = patches.Rectangle(
-            (0, -blank.width / 2), blank.length, blank.width,
-            linewidth=2, edgecolor="#80c0ff", facecolor="none", label="Blank"
-        )
-        ax.add_patch(rect_blank)
+        # Draw blank outline aligned with toolpath coordinates (absolute 0 to width)
+        # The blank should match where the toolpaths are drawn
+        corners = [
+            (0, 0), (blank.length, 0),
+            (blank.length, blank.width), (0, blank.width), (0, 0)
+        ]
+
+        # Transform to machine space
+        transformed = [self._transform_to_machine(x, y) for x, y in corners]
+        xs = [pt[0] for pt in transformed]
+        ys = [pt[1] for pt in transformed]
+        ax.plot(xs, ys, color="#80c0ff", linewidth=2, label="Blank")
 
         # Slot geometry
         core_positions = blank.get_core_positions(geom, params)
@@ -95,43 +124,69 @@ class GcodeCanvas(FigureCanvas):
 
         core_offset = params.sidewall_width - params.sidewall_overlap
 
-        # Draw slots and tab markers
+        # Draw slots and tab markers (in machine coordinates)
         for core_idx, (core_x, core_y) in enumerate(core_positions):
-            # Left slot edges
-            slot_left_outer = left_outline + core_y
-            slot_left_inner = left_outline + core_offset + core_y
+            # Left slot edges (in absolute blank coordinates)
+            slot_left_outer = left_outline + core_y + blank.width / 2.0
+            slot_left_inner = left_outline + core_offset + core_y + blank.width / 2.0
 
-            # Right slot edges
-            slot_right_inner = right_outline - core_offset + core_y
-            slot_right_outer = right_outline + core_y
+            # Right slot edges (in absolute blank coordinates)
+            slot_right_inner = right_outline - core_offset + core_y + blank.width / 2.0
+            slot_right_outer = right_outline + core_y + blank.width / 2.0
 
-            # Draw slot outline (left)
-            ax.plot(y_samples_offset, slot_left_outer, color="#ffa040", linewidth=1, linestyle="-")
-            ax.plot(y_samples_offset, slot_left_inner, color="#ffa040", linewidth=1, linestyle="-")
+            # Transform and draw slot outline (left)
+            machine_left_outer = [self._transform_to_machine(x, y) for x, y in zip(y_samples_offset, slot_left_outer)]
+            machine_left_inner = [self._transform_to_machine(x, y) for x, y in zip(y_samples_offset, slot_left_inner)]
+            if machine_left_outer and not any(np.isnan(p).any() for p in machine_left_outer):
+                mx_outer, my_outer = zip(*machine_left_outer)
+                ax.plot(mx_outer, my_outer, color="#ffa040", linewidth=1, linestyle="-")
+            if machine_left_inner and not any(np.isnan(p).any() for p in machine_left_inner):
+                mx_inner, my_inner = zip(*machine_left_inner)
+                ax.plot(mx_inner, my_inner, color="#ffa040", linewidth=1, linestyle="-")
 
-            # Draw slot outline (right)
-            ax.plot(y_samples_offset, slot_right_inner, color="#ffa040", linewidth=1, linestyle="-")
-            ax.plot(y_samples_offset, slot_right_outer, color="#ffa040", linewidth=1, linestyle="-")
+            # Transform and draw slot outline (right)
+            machine_right_inner = [self._transform_to_machine(x, y) for x, y in zip(y_samples_offset, slot_right_inner)]
+            machine_right_outer = [self._transform_to_machine(x, y) for x, y in zip(y_samples_offset, slot_right_outer)]
+            if machine_right_inner and not any(np.isnan(p).any() for p in machine_right_inner):
+                mx_inner, my_inner = zip(*machine_right_inner)
+                ax.plot(mx_inner, my_inner, color="#ffa040", linewidth=1, linestyle="-")
+            if machine_right_outer and not any(np.isnan(p).any() for p in machine_right_outer):
+                mx_outer, my_outer = zip(*machine_right_outer)
+                ax.plot(mx_outer, my_outer, color="#ffa040", linewidth=1, linestyle="-")
 
-            # Tab markers
+            # Tab markers (transform to machine space)
             slot_centers = [(y_samples_offset, slot_left_inner), (y_samples_offset, slot_right_inner)]
-            for slot_y_samples, slot_y_vals in slot_centers:
+            for slot_x_samples, slot_y_vals in slot_centers:
                 # Skip if any NaN values
                 if np.isnan(slot_y_vals).any():
                     continue
-                arc_length = np.cumsum(np.concatenate([[0], np.linalg.norm(np.diff(np.column_stack([slot_y_samples, slot_y_vals])), axis=1)]))
+                arc_length = np.cumsum(np.concatenate([[0], np.linalg.norm(np.diff(np.column_stack([slot_x_samples, slot_y_vals])), axis=1)]))
                 total_arc = arc_length[-1]
                 if total_arc > 0:
                     tab_centers = np.arange(0, total_arc, slot_params.tab_spacing)
                     for tc in tab_centers:
                         idx = np.argmin(np.abs(arc_length - tc))
-                        ax.plot(slot_y_samples[idx], slot_y_vals[idx], "r.", markersize=4)
+                        mx, my = self._transform_to_machine(slot_x_samples[idx], slot_y_vals[idx])
+                        ax.plot(mx, my, "r.", markersize=4)
 
-        ax.set_xlim(-50, blank.length + 50)
-        ax.set_ylim(-blank.width / 2 - 50, blank.width / 2 + 50)
+        # Set axis limits based on transformed blank dimensions and origin corner
+        from core_carve.core_blank import MachineOrientation, OriginCorner
+
+        # Compute bounds in machine space
+        corners_machine = [(x, y) for x, y in transformed]
+        xs = [pt[0] for pt in corners_machine]
+        ys = [pt[1] for pt in corners_machine]
+        x_min, x_max = min(xs), max(xs)
+        y_min, y_max = min(ys), max(ys)
+
+        x_margin = max(blank.length, blank.width) * 0.1
+        y_margin = max(blank.length, blank.width) * 0.1
+        ax.set_xlim(x_min - x_margin, x_max + x_margin)
+        ax.set_ylim(y_min - y_margin, y_max + y_margin)
+
         ax.set_aspect("equal")
-        ax.set_xlabel("Along blank (mm)")
-        ax.set_ylabel("Across blank (mm)")
+        ax.set_xlabel("Machine X (mm)")
+        ax.set_ylabel("Machine Y (mm)")
         ax.set_title("Slot Layout (Top View)")
         ax.grid(True, alpha=0.2, color="#555555")
         ax.legend(fontsize=8, facecolor="#333333", labelcolor="#dddddd")
@@ -140,8 +195,8 @@ class GcodeCanvas(FigureCanvas):
         self.draw()
 
     def plot_toolpaths(self, moves):
-        """Overlay toolpaths colour-coded by Z depth."""
-        if not moves:
+        """Overlay toolpaths colour-coded by Z depth in machine coordinates."""
+        if not moves or not self._blank:
             return
 
         self._setup_axes()
@@ -152,7 +207,7 @@ class GcodeCanvas(FigureCanvas):
         z_min, z_max = min(z_values), max(z_values)
         z_range = z_max - z_min if z_max != z_min else 1.0
 
-        # Plot moves
+        # Plot moves (transformed to machine space)
         for i in range(1, len(moves)):
             prev_move = moves[i - 1]
             curr_move = moves[i]
@@ -164,19 +219,40 @@ class GcodeCanvas(FigureCanvas):
             linestyle = "--" if curr_move.is_rapid else "-"
             linewidth = 0.5 if curr_move.is_rapid else 1.5
 
+            # Transform to machine space
+            prev_mx, prev_my = self._transform_to_machine(prev_move.x, prev_move.y)
+            curr_mx, curr_my = self._transform_to_machine(curr_move.x, curr_move.y)
+
             ax.plot(
-                [prev_move.x, curr_move.x],
-                [prev_move.y, curr_move.y],
+                [prev_mx, curr_mx],
+                [prev_my, curr_my],
                 color=color,
                 linestyle=linestyle,
                 linewidth=linewidth,
                 alpha=0.6
             )
 
+        # Set axis limits based on blank dimensions and origin corner
+        blank = self._blank
+        corners = [
+            (0, 0), (blank.length, 0),
+            (blank.length, blank.width), (0, blank.width)
+        ]
+        transformed = [self._transform_to_machine(x, y) for x, y in corners]
+        xs = [pt[0] for pt in transformed]
+        ys = [pt[1] for pt in transformed]
+        x_min, x_max = min(xs), max(xs)
+        y_min, y_max = min(ys), max(ys)
+
+        x_margin = max(blank.length, blank.width) * 0.1
+        y_margin = max(blank.length, blank.width) * 0.1
+        ax.set_xlim(x_min - x_margin, x_max + x_margin)
+        ax.set_ylim(y_min - y_margin, y_max + y_margin)
+
         ax.set_aspect("equal")
-        ax.set_xlabel("X (mm)")
-        ax.set_ylabel("Y (mm)")
-        ax.set_title("Toolpath Visualization")
+        ax.set_xlabel("Machine X (mm)")
+        ax.set_ylabel("Machine Y (mm)")
+        ax.set_title("Toolpath Visualization (Machine Coordinates)")
         ax.grid(True, alpha=0.2, color="#555555")
 
         self.fig.tight_layout(pad=2.0)
@@ -236,30 +312,36 @@ class GcodeCanvas(FigureCanvas):
         self._setup_axes()
         ax = self.ax
 
-        # Draw blank outline
+        # Draw blank outline in machine coordinates
         if self._blank:
-            rect_blank = patches.Rectangle(
-                (0, -self._blank.width / 2), self._blank.length, self._blank.width,
-                linewidth=2, edgecolor="#80c0ff", facecolor="none", label="Blank"
-            )
-            ax.add_patch(rect_blank)
+            # Transform blank corners to machine space
+            corners = [
+                (0, 0), (self._blank.length, 0),
+                (self._blank.length, self._blank.width), (0, self._blank.width), (0, 0)
+            ]
+            transformed = [self._transform_to_machine(x, y) for x, y in corners]
+            xs = [pt[0] for pt in transformed]
+            ys = [pt[1] for pt in transformed]
+            ax.plot(xs, ys, color="#80c0ff", linewidth=2, label="Blank")
 
-        # Draw path taken so far (rapid moves dashed, cutting moves solid)
+        # Draw path taken so far in machine coordinates (rapid moves dashed, cutting moves solid)
         # Optimize by batching moves of the same type instead of drawing each segment individually
         if self._moves and len(self._moves) > 0:
             cutting_x, cutting_y = [], []
             rapid_x, rapid_y = [], []
 
-            # Collect path segments up to current index
+            # Collect path segments up to current index (transformed to machine space)
             for i in range(1, min(self._playback_idx, len(self._moves))):
                 prev = self._moves[i - 1]
                 curr = self._moves[i]
+                prev_mx, prev_my = self._transform_to_machine(prev.x, prev.y)
+                curr_mx, curr_my = self._transform_to_machine(curr.x, curr.y)
                 if curr.is_rapid:
-                    rapid_x.extend([prev.x, curr.x, None])
-                    rapid_y.extend([prev.y, curr.y, None])
+                    rapid_x.extend([prev_mx, curr_mx, None])
+                    rapid_y.extend([prev_my, curr_my, None])
                 else:
-                    cutting_x.extend([prev.x, curr.x, None])
-                    cutting_y.extend([prev.y, curr.y, None])
+                    cutting_x.extend([prev_mx, curr_mx, None])
+                    cutting_y.extend([prev_my, curr_my, None])
 
             # Draw batched paths (single plot call per type is much faster)
             if cutting_x:
@@ -267,11 +349,12 @@ class GcodeCanvas(FigureCanvas):
             if rapid_x:
                 ax.plot(rapid_x, rapid_y, color="#ff8844", linewidth=1.5, linestyle="--", alpha=0.7)
 
-            # Draw current cutter position as red circle (only if valid index)
+            # Draw current cutter position as red circle in machine coordinates (only if valid index)
             if self._playback_idx < len(self._moves):
                 curr_move = self._moves[self._playback_idx]
+                curr_mx, curr_my = self._transform_to_machine(curr_move.x, curr_move.y)
                 circle = patches.Circle(
-                    (curr_move.x, curr_move.y),
+                    (curr_mx, curr_my),
                     self._tool_diameter / 2,
                     edgecolor="#ff0000",
                     facecolor="none",
@@ -282,10 +365,23 @@ class GcodeCanvas(FigureCanvas):
 
         ax.set_aspect("equal")
         if self._blank:
-            ax.set_xlim(-50, self._blank.length + 50)
-            ax.set_ylim(-self._blank.width / 2 - 50, self._blank.width / 2 + 50)
-        ax.set_xlabel("Along blank (mm)")
-        ax.set_ylabel("Across blank (mm)")
+            # Set axis limits based on blank dimensions and origin corner
+            corners = [
+                (0, 0), (self._blank.length, 0),
+                (self._blank.length, self._blank.width), (0, self._blank.width)
+            ]
+            transformed = [self._transform_to_machine(x, y) for x, y in corners]
+            xs = [pt[0] for pt in transformed]
+            ys = [pt[1] for pt in transformed]
+            x_min, x_max = min(xs), max(xs)
+            y_min, y_max = min(ys), max(ys)
+
+            x_margin = max(self._blank.length, self._blank.width) * 0.1
+            y_margin = max(self._blank.length, self._blank.width) * 0.1
+            ax.set_xlim(x_min - x_margin, x_max + x_margin)
+            ax.set_ylim(y_min - y_margin, y_max + y_margin)
+        ax.set_xlabel("Machine X (mm)")
+        ax.set_ylabel("Machine Y (mm)")
         if self._moves:
             progress_pct = int(100 * min(self._playback_idx, len(self._moves)) / len(self._moves)) if len(self._moves) > 0 else 0
             status = "Playing" if self._is_playing else "Paused"
@@ -306,8 +402,8 @@ class GcodeCanvas(FigureCanvas):
             self.plot_toolpaths(self._moves)
 
     def plot_toolpaths_3d(self, moves):
-        """Plot toolpaths in 3D using Line3DCollection for fast rendering."""
-        if not moves:
+        """Plot toolpaths in 3D using Line3DCollection for fast rendering in machine coordinates."""
+        if not moves or not self._blank:
             return
 
         from mpl_toolkits.mplot3d.art3d import Line3DCollection
@@ -337,13 +433,16 @@ class GcodeCanvas(FigureCanvas):
         z_min, z_max = min(z_values), max(z_values)
         z_range = z_max - z_min if z_max != z_min else 1.0
 
-        # Build two collections: cutting moves and rapid moves
+        # Build two collections: cutting moves and rapid moves (transformed to machine space)
         cut_segs, cut_colors = [], []
         rapid_segs, rapid_colors = [], []
 
         for i in range(1, len(sampled)):
             p, c = sampled[i - 1], sampled[i]
-            seg = [[p.x, p.y, p.z], [c.x, c.y, c.z]]
+            # Transform to machine space
+            p_mx, p_my = self._transform_to_machine(p.x, p.y)
+            c_mx, c_my = self._transform_to_machine(c.x, c.y)
+            seg = [[p_mx, p_my, p.z], [c_mx, c_my, c.z]]
             z_norm = (c.z - z_min) / z_range if z_range > 0 else 0.5
             color = cm.coolwarm(z_norm)
             if c.is_rapid:
@@ -360,17 +459,18 @@ class GcodeCanvas(FigureCanvas):
             rl = Line3DCollection(rapid_segs, colors=rapid_colors, linewidths=0.5, alpha=0.3)
             ax.add_collection3d(rl)
 
-        # Set axis limits explicitly (required after add_collection3d)
-        xs = [m.x for m in sampled]
-        ys = [m.y for m in sampled]
+        # Set axis limits explicitly (required after add_collection3d) in machine space
+        machine_coords = [self._transform_to_machine(m.x, m.y) for m in sampled]
+        xs = [mc[0] for mc in machine_coords]
+        ys = [mc[1] for mc in machine_coords]
         zs = [m.z for m in sampled]
         ax.set_xlim(min(xs), max(xs))
         ax.set_ylim(min(ys), max(ys))
         ax.set_zlim(min(zs), max(zs))
 
-        ax.set_xlabel("X (mm)")
-        ax.set_ylabel("Y (mm)")
-        ax.set_zlabel("Z (mm)")
+        ax.set_xlabel("Machine X (mm)")
+        ax.set_ylabel("Machine Y (mm)")
+        ax.set_zlabel("Machine Z (mm)")
         n_shown = len(sampled) - 1
         ax.set_title(f"3D Toolpath — {n_shown} segments shown (of {len(moves)-1})")
 

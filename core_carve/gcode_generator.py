@@ -90,14 +90,14 @@ def generate_slot_gcode(
         if blank.machine_orientation == MachineOrientation.Y_AXIS:
             x, y = y, x
 
-        # Flip based on origin corner
+        # Shift based on origin corner
         if blank.origin_corner == OriginCorner.TOP_LEFT:
-            y = blank.width - y
+            y = y - blank.width
         elif blank.origin_corner == OriginCorner.TOP_RIGHT:
-            x = blank.length - x
-            y = blank.width - y
+            x = x - blank.length
+            y = y - blank.width
         elif blank.origin_corner == OriginCorner.BOTTOM_RIGHT:
-            x = blank.length - x
+            x = x - blank.length
 
         return x, y
 
@@ -162,7 +162,7 @@ def generate_slot_gcode(
                 # Rapid to slot start (or end if reversing) at clearance height
                 start_idx = cut_indices[0]
                 start_x = slot_y_samples[start_idx]
-                start_y = slot_centerline[start_idx] + width_offset
+                start_y = slot_centerline[start_idx] + width_offset + blank.width / 2.0
                 moves.append(Move(start_x, start_y, slot_params.clearance_height, is_rapid=True, feed=slot_params.rapid_feed))
                 mach_x, mach_y = transform_to_machine_space(start_x, start_y)
                 gcode_lines.append(f"G00 X{mach_x:.3f} Y{mach_y:.3f}")
@@ -177,7 +177,7 @@ def generate_slot_gcode(
                 tab_z = -(slot_depth - slot_params.tab_thickness)
                 for i in cut_indices:
                     x = slot_y_samples[i]
-                    y = slot_centerline[i] + width_offset
+                    y = slot_centerline[i] + width_offset + blank.width / 2.0
                     # Check if current position is within a tab zone (by Y coordinate)
                     in_tab = any(start <= x <= end for start, end in zip(tab_start_y, tab_end_y))
                     # For shallow passes, ignore tabs; for deep passes, lift at tabs
@@ -198,7 +198,7 @@ def generate_slot_gcode(
 
                 # Rapid to clearance
                 end_idx = cut_indices[-1]
-                end_x, end_y = slot_y_samples[end_idx], slot_centerline[end_idx] + width_offset
+                end_x, end_y = slot_y_samples[end_idx], slot_centerline[end_idx] + width_offset + blank.width / 2.0
                 moves.append(Move(end_x, end_y, slot_params.clearance_height, is_rapid=True, feed=slot_params.rapid_feed))
                 end_mach_x, end_mach_y = transform_to_machine_space(end_x, end_y)
                 gcode_lines.append(f"G00 X{end_mach_x:.3f} Y{end_mach_y:.3f}")

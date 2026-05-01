@@ -64,21 +64,47 @@ class ProfileCanvas(FigureCanvas):
         self.fig.tight_layout(pad=2.0)
         self.draw()
 
+    def _transform_to_machine(self, x, y):
+        """Transform blank-space coords to machine coords based on blank settings."""
+        if not self._blank:
+            return x, y
+
+        from core_carve.core_blank import MachineOrientation, OriginCorner
+
+        # Swap axes if ski runs along Y
+        if self._blank.machine_orientation == MachineOrientation.Y_AXIS:
+            x, y = y, x
+
+        # Shift based on origin corner
+        if self._blank.origin_corner == OriginCorner.TOP_LEFT:
+            y = y - self._blank.width
+        elif self._blank.origin_corner == OriginCorner.TOP_RIGHT:
+            x = x - self._blank.length
+            y = y - self._blank.width
+        elif self._blank.origin_corner == OriginCorner.BOTTOM_RIGHT:
+            x = x - self._blank.length
+
+        return x, y
+
     def plot_toolpaths(self, moves, blank=None):
-        """Plot profiling toolpaths in 2D (top view)."""
+        """Plot profiling toolpaths in 2D (top view) in machine coordinates."""
         if not moves:
             return
 
         self._setup_axes()
+        self._blank = blank
         ax = self.ax
 
-        # Draw blank if provided
+        # Draw blank outline in machine coordinates
         if blank:
-            rect_blank = patches.Rectangle(
-                (0, -blank.width / 2), blank.length, blank.width,
-                linewidth=2, edgecolor="#80c0ff", facecolor="none", label="Blank"
-            )
-            ax.add_patch(rect_blank)
+            corners = [
+                (0, 0), (blank.length, 0),
+                (blank.length, blank.width), (0, blank.width), (0, 0)
+            ]
+            transformed = [self._transform_to_machine(x, y) for x, y in corners]
+            xs = [pt[0] for pt in transformed]
+            ys = [pt[1] for pt in transformed]
+            ax.plot(xs, ys, color="#80c0ff", linewidth=2, label="Blank")
 
         z_values = [m.z for m in moves]
         z_min, z_max = min(z_values), max(z_values)
@@ -93,19 +119,36 @@ class ProfileCanvas(FigureCanvas):
             linestyle = "--" if curr_move.is_rapid else "-"
             linewidth = 0.5 if curr_move.is_rapid else 1.5
 
+            # Transform to machine coordinates
+            prev_mx, prev_my = self._transform_to_machine(prev_move.x, prev_move.y)
+            curr_mx, curr_my = self._transform_to_machine(curr_move.x, curr_move.y)
+
             ax.plot(
-                [prev_move.x, curr_move.x],
-                [prev_move.y, curr_move.y],
+                [prev_mx, curr_mx],
+                [prev_my, curr_my],
                 color=color, linestyle=linestyle, linewidth=linewidth, alpha=0.6
             )
 
         if blank:
-            ax.set_xlim(-50, blank.length + 50)
-            ax.set_ylim(-blank.width / 2 - 50, blank.width / 2 + 50)
+            # Set axis limits based on blank dimensions and origin corner
+            corners = [
+                (0, 0), (blank.length, 0),
+                (blank.length, blank.width), (0, blank.width)
+            ]
+            transformed = [self._transform_to_machine(x, y) for x, y in corners]
+            xs = [pt[0] for pt in transformed]
+            ys = [pt[1] for pt in transformed]
+            x_min, x_max = min(xs), max(xs)
+            y_min, y_max = min(ys), max(ys)
+
+            x_margin = max(blank.length, blank.width) * 0.1
+            y_margin = max(blank.length, blank.width) * 0.1
+            ax.set_xlim(x_min - x_margin, x_max + x_margin)
+            ax.set_ylim(y_min - y_margin, y_max + y_margin)
         ax.set_aspect("equal")
-        ax.set_xlabel("Along blank (mm)")
-        ax.set_ylabel("Across blank (mm)")
-        ax.set_title("Profiling Toolpath (Top View)")
+        ax.set_xlabel("Machine X (mm)")
+        ax.set_ylabel("Machine Y (mm)")
+        ax.set_title("Profiling Toolpath (Machine Coordinates)")
         ax.grid(True, alpha=0.2, color="#555555")
         if blank:
             ax.legend(fontsize=8, facecolor="#333333", labelcolor="#dddddd")
@@ -304,19 +347,22 @@ class ProfileCanvas(FigureCanvas):
             self._is_playing = False
 
     def _step_playback_frame(self):
-        """Draw current playback frame."""
+        """Draw current playback frame in machine coordinates."""
         self._setup_axes()
         ax = self.ax
 
-        # Draw blank outline
+        # Draw blank outline in machine coordinates
         if self._blank:
-            rect_blank = patches.Rectangle(
-                (0, -self._blank.width / 2), self._blank.length, self._blank.width,
-                linewidth=2, edgecolor="#80c0ff", facecolor="none", label="Blank"
-            )
-            ax.add_patch(rect_blank)
+            corners = [
+                (0, 0), (self._blank.length, 0),
+                (self._blank.length, self._blank.width), (0, self._blank.width), (0, 0)
+            ]
+            transformed = [self._transform_to_machine(x, y) for x, y in corners]
+            xs = [pt[0] for pt in transformed]
+            ys = [pt[1] for pt in transformed]
+            ax.plot(xs, ys, color="#80c0ff", linewidth=2, label="Blank")
 
-        # Draw path taken so far
+        # Draw path taken so far in machine coordinates
         if self._moves and len(self._moves) > 0:
             cutting_x, cutting_y = [], []
             rapid_x, rapid_y = [], []
@@ -324,12 +370,14 @@ class ProfileCanvas(FigureCanvas):
             for i in range(1, min(self._playback_idx, len(self._moves))):
                 prev = self._moves[i - 1]
                 curr = self._moves[i]
+                prev_mx, prev_my = self._transform_to_machine(prev.x, prev.y)
+                curr_mx, curr_my = self._transform_to_machine(curr.x, curr.y)
                 if curr.is_rapid:
-                    rapid_x.extend([prev.x, curr.x, None])
-                    rapid_y.extend([prev.y, curr.y, None])
+                    rapid_x.extend([prev_mx, curr_mx, None])
+                    rapid_y.extend([prev_my, curr_my, None])
                 else:
-                    cutting_x.extend([prev.x, curr.x, None])
-                    cutting_y.extend([prev.y, curr.y, None])
+                    cutting_x.extend([prev_mx, curr_mx, None])
+                    cutting_y.extend([prev_my, curr_my, None])
 
             if cutting_x:
                 ax.plot(cutting_x, cutting_y, color="#60cc60", linewidth=1.5, linestyle="-", alpha=0.7)
@@ -338,15 +386,29 @@ class ProfileCanvas(FigureCanvas):
 
             if self._playback_idx < len(self._moves):
                 curr_move = self._moves[self._playback_idx]
-                circle = patches.Circle((curr_move.x, curr_move.y), self._tool_diameter / 2, edgecolor="#ff0000", facecolor="none", linewidth=2)
+                curr_mx, curr_my = self._transform_to_machine(curr_move.x, curr_move.y)
+                circle = patches.Circle((curr_mx, curr_my), self._tool_diameter / 2, edgecolor="#ff0000", facecolor="none", linewidth=2)
                 ax.add_patch(circle)
 
         ax.set_aspect("equal")
         if self._blank:
-            ax.set_xlim(-50, self._blank.length + 50)
-            ax.set_ylim(-self._blank.width / 2 - 50, self._blank.width / 2 + 50)
-        ax.set_xlabel("Along blank (mm)")
-        ax.set_ylabel("Across blank (mm)")
+            # Set axis limits based on blank dimensions and origin corner
+            corners = [
+                (0, 0), (self._blank.length, 0),
+                (self._blank.length, self._blank.width), (0, self._blank.width)
+            ]
+            transformed = [self._transform_to_machine(x, y) for x, y in corners]
+            xs = [pt[0] for pt in transformed]
+            ys = [pt[1] for pt in transformed]
+            x_min, x_max = min(xs), max(xs)
+            y_min, y_max = min(ys), max(ys)
+
+            x_margin = max(self._blank.length, self._blank.width) * 0.1
+            y_margin = max(self._blank.length, self._blank.width) * 0.1
+            ax.set_xlim(x_min - x_margin, x_max + x_margin)
+            ax.set_ylim(y_min - y_margin, y_max + y_margin)
+        ax.set_xlabel("Machine X (mm)")
+        ax.set_ylabel("Machine Y (mm)")
         if self._moves:
             progress = int(100 * min(self._playback_idx, len(self._moves)) / len(self._moves))
             status = "Playing" if self._is_playing else "Paused"
@@ -394,6 +456,8 @@ class ProfileParameterPanel(QWidget):
         self.f_clearance = _FloatField(10.0)
         self.combo_direction = QComboBox()
         self.combo_direction.addItems(["Along ski", "Across ski"])
+        self.combo_cutting_method = QComboBox()
+        self.combo_cutting_method.addItems(["Conventional", "Climb", "Both directions"])
 
         cut_lay.addRow("Tool diameter (mm):", self.f_tool_diameter)
         cut_lay.addRow("Spindle speed (RPM):", self.f_spindle_speed)
@@ -404,6 +468,7 @@ class ProfileParameterPanel(QWidget):
         cut_lay.addRow("Stepover (mm):", self.f_stepover)
         cut_lay.addRow("Clearance height (mm):", self.f_clearance)
         cut_lay.addRow("Cut direction:", self.combo_direction)
+        cut_lay.addRow("Cutting method:", self.combo_cutting_method)
         root.addWidget(cut_group)
 
         # ── Buttons ───────────────────────────────────────────────────────────
@@ -433,6 +498,14 @@ class ProfileParameterPanel(QWidget):
         root.addStretch()
 
     def get_params(self) -> ProfileParams:
+        cutting_method_text = self.combo_cutting_method.currentText().lower()
+        if "conventional" in cutting_method_text:
+            cutting_direction = "conventional"
+        elif "climb" in cutting_method_text:
+            cutting_direction = "climb"
+        else:
+            cutting_direction = "both"
+
         return ProfileParams(
             tool_diameter=self.f_tool_diameter.value(),
             spindle_speed=int(self.f_spindle_speed.value()),
@@ -443,6 +516,7 @@ class ProfileParameterPanel(QWidget):
             stepover=self.f_stepover.value(),
             clearance_height=self.f_clearance.value(),
             direction=self.combo_direction.currentText().lower().split()[0],
+            cutting_direction=cutting_direction,
         )
 
     def set_params(self, p: ProfileParams):
@@ -454,6 +528,11 @@ class ProfileParameterPanel(QWidget):
         self.f_finishing_depth.setText(str(p.finishing_depth_of_cut))
         self.f_stepover.setText(str(p.stepover))
         self.f_clearance.setText(str(p.clearance_height))
+
+        # Restore cutting direction if available
+        if hasattr(p, "cutting_direction"):
+            idx = {"conventional": 0, "climb": 1, "both": 2}.get(p.cutting_direction, 2)
+            self.combo_cutting_method.setCurrentIndex(idx)
 
 
 # ── Tab widget ────────────────────────────────────────────────────────────────

@@ -333,6 +333,25 @@ def compute_geometry(outline: np.ndarray, params: SkiParams) -> SkiGeometry:
     geom.underfoot_end_x = centre_uf + params.underfoot_length / 2.0
     geom._underfoot_thickness = params.underfoot_thickness
 
+    # Clamp underfoot region to core extent for very small skis.
+    # If underfoot is larger than core, shrink it symmetrically around waist.
+    core_extent = geom.core_tail_x - geom.core_tip_x
+    if geom.underfoot_end_x - geom.underfoot_start_x > core_extent:
+        # Underfoot is larger than core; shrink to 90% of core extent, centered at waist
+        new_uf_len = 0.9 * core_extent
+        geom.underfoot_start_x = centre_uf - new_uf_len / 2.0
+        geom.underfoot_end_x = centre_uf + new_uf_len / 2.0
+
+    # Then clamp to core bounds
+    geom.underfoot_start_x = float(np.clip(geom.underfoot_start_x, geom.core_tip_x, geom.core_tail_x))
+    geom.underfoot_end_x = float(np.clip(geom.underfoot_end_x, geom.core_tip_x, geom.core_tail_x))
+
+    # Ensure at least a small gap for taper splines (1mm minimum)
+    if geom.underfoot_end_x - geom.underfoot_start_x < 1.0:
+        mid = (geom.underfoot_start_x + geom.underfoot_end_x) / 2.0
+        geom.underfoot_start_x = max(geom.core_tip_x, mid - 0.5)
+        geom.underfoot_end_x = min(geom.core_tail_x, mid + 0.5)
+
     geom._thickness_spline_tip, geom._thickness_spline_tail = _build_thickness_splines(geom, params)
 
     return geom

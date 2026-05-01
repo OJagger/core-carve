@@ -21,6 +21,7 @@ class ProfileParams:
     stepover: float = 6.0
     clearance_height: float = 10.0
     direction: str = "along"  # "along" (ski length) or "across" (width)
+    cutting_direction: str = "both"  # "conventional", "climb", or "both"
 
     def to_json(self, path: str | Path) -> None:
         with open(path, "w") as f:
@@ -52,19 +53,23 @@ def generate_profile_gcode(
     """
     Generate G-code for core thickness profiling in blank-space coordinates.
 
-    Strategy: Multi-pass cutting that follows the core thickness contour.
-    - For "along" direction: tool traverses along ski Y, Z varies with core thickness
-    - Each pass removes a layer, with final pass achieving exact contour
-    - Tool extends past sidewalls by approximately one tool diameter
+    Strategy:
+    - Roughing passes cut at a fixed flat depth (from blank top), rising only where
+      the core surface protrudes above that depth. Leaves finishing_depth_of_cut
+      above the final surface.
+    - Finishing pass follows the exact core surface contour.
+    - "Along" direction passes split in two halves: tip→center and tail→center.
+    - Width extends past the outer ski outline edge by one tool radius each side.
 
     Blank space:
       X = along blank = ski_Y + x_offset  (ski runs along blank X)
-      Y = across blank = ski_X + core_y_offset
+      Y = across blank = ski_X + blank.width/2
 
     Returns:
-        (gcode_string, moves_list)  — moves are in blank space for visualization.
+        (gcode_string, moves_list)  — moves are in blank-space absolute coords.
     """
     from core_carve.core_blank import MachineOrientation, OriginCorner
+    from core_carve.ski_geometry import half_widths_at_y
 
     core_positions = blank.get_core_positions(geom, params)
     if not core_positions:
@@ -73,25 +78,21 @@ def generate_profile_gcode(
     core_start = geom.core_tip_x - 25.0
     core_end = geom.core_tail_x + 25.0
     core_extent = core_end - core_start
-
-    # Centering offset: same calculation as tab_gcode.py
     x_offset = (blank.length - core_extent) / 2.0 - core_start
 
     def ski_to_blank(y_ski: float, x_ski: float) -> tuple[float, float]:
-        """Convert ski-geometry coords to blank-space coords."""
-        return y_ski + x_offset, x_ski
+        return y_ski + x_offset, x_ski + blank.width / 2.0
 
     def transform_to_machine_space(bx: float, by: float) -> tuple[float, float]:
-        """Apply machine orientation and origin corner transforms."""
         if blank.machine_orientation == MachineOrientation.Y_AXIS:
             bx, by = by, bx
         if blank.origin_corner == OriginCorner.TOP_LEFT:
-            by = blank.width - by
+            by = by - blank.width
         elif blank.origin_corner == OriginCorner.TOP_RIGHT:
-            bx = blank.length - bx
-            by = blank.width - by
+            bx = bx - blank.length
+            by = by - blank.width
         elif blank.origin_corner == OriginCorner.BOTTOM_RIGHT:
-            bx = blank.length - bx
+            bx = bx - blank.length
         return bx, by
 
     moves: list[Move] = []
@@ -111,92 +112,164 @@ def generate_profile_gcode(
         mx, my = transform_to_machine_space(bx, by)
         gcode.append(f"G01 X{mx:.3f} Y{my:.3f} Z{bz:.3f} F{f:.1f}")
 
-    # Dense sampling of core thickness along ski length
-    y_thickness_samples = np.linspace(core_start, core_end, 500)
-    h_core_samples = geom.thickness_at(y_thickness_samples)
+    # Dense sampling along ski length
+    y_samps = np.linspace(core_start, core_end, 500)
 
-    # Blank bottom is at Z=0, top surface at Z=blank.thickness
-    # Core bottom surface is at Z=blank.thickness - h_core(y)
-    # We cut from blank top down to the core surface
+    # Clamp to core extent for thickness evaluation so extensions use tip/tail thickness
+    y_for_h = np.clip(y_samps, geom.core_tip_x, geom.core_tail_x)
+    h_samps = geom.thickness_at(y_for_h)
 
-    # Generate pass depths: rough passes + finishing pass
-    passes = []  # list of (depth_per_pass, is_finish)
-    total_depth = blank.thickness
-    z_roughed = 0.0  # current Z after roughing (from top, positive down)
+    # Precompute ski outline half-widths at each sample (clamp to outline bounds)
+    outline_y_min = geom.outline[:, 1].min()
+    outline_y_max = geom.outline[:, 1].max()
+    y_for_outline = np.clip(y_samps, outline_y_min, outline_y_max)
+    left_samps, right_samps = half_widths_at_y(geom.outline, y_for_outline)
 
-    while z_roughed + profile_params.roughing_depth_per_pass < total_depth - profile_params.finishing_depth_of_cut:
-        passes.append((profile_params.roughing_depth_per_pass, False))
-        z_roughed += profile_params.roughing_depth_per_pass
+    def z_target_at(idx: int, z_flat, is_finish: bool) -> float:
+        """Z cutting target: flat roughing depth clamped by surface + finishing allowance."""
+        z_surface = -blank.thickness + h_samps[idx]
+        if is_finish:
+            return z_surface
+        # Leave finishing_depth_of_cut above the surface during roughing
+        z_limit = z_surface + profile_params.finishing_depth_of_cut
+        return max(z_flat, z_limit)
 
-    # Finishing pass: remove last finishing_depth_of_cut to surface
-    remaining = total_depth - z_roughed
-    if remaining > 0.01:
-        passes.append((remaining - profile_params.finishing_depth_of_cut, False))
-    passes.append((profile_params.finishing_depth_of_cut, True))
+    # Build pass list: (z_flat, is_finish, z_flat_prev)
+    # z_flat_prev is the previous pass depth — used to know when to stop following the surface
+    # (once the surface+allowance reaches the previous pass level, that region was already cleared)
+    passes: list[tuple] = []
+    cumulative = 0.0
+    z_prev = 0.0  # blank top surface = no previous cut
+    while cumulative + profile_params.roughing_depth_per_pass < blank.thickness:
+        cumulative += profile_params.roughing_depth_per_pass
+        passes.append((-cumulative, False, z_prev))
+        z_prev = -cumulative
+    passes.append((None, True, z_prev))
+
+    # Split point: center of underfoot region (where core surface is highest)
+    y_split = (geom.underfoot_start_x + geom.underfoot_end_x) / 2.0
+    split_idx = int(np.clip(np.searchsorted(y_samps, y_split), 1, len(y_samps) - 2))
+
+    def useful_indices(natural_idx, z_flat, is_finish, z_flat_prev):
+        """Return the prefix of natural_idx for one roughing pass half.
+
+        The pass cuts at z_flat (flat depth) until the surface+allowance rises above z_flat,
+        then follows the surface uphill until it reaches z_flat_prev (the previous pass depth).
+        Everything above z_flat_prev was already removed by the prior pass.
+        For finishing: return all indices (full contour).
+        """
+        if is_finish:
+            return list(natural_idx)
+        result = []
+        for idx in natural_idx:
+            z = z_target_at(idx, z_flat, is_finish)
+            if z >= z_flat_prev - 0.01:
+                break
+            result.append(idx)
+        return result
 
     for core_x_along, core_y_across in core_positions:
-        # Width of core to cover: extend across full ski width plus tool diameter on each side
-        half_w = params.sidewall_width + getattr(params, "sidewall_overlap", 0.0)
         tool_radius = profile_params.tool_diameter / 2.0
-        x_ski_min = -half_w - tool_radius
-        x_ski_max = half_w + tool_radius
 
         if profile_params.direction == "along":
-            # Passes run along the ski (blank X axis), spaced across width (blank Y axis)
+            # Width: use max ski outline extent + tool_radius on each side
+            valid_left = left_samps[~np.isnan(left_samps)]
+            valid_right = right_samps[~np.isnan(right_samps)]
+            if len(valid_left) == 0 or len(valid_right) == 0:
+                continue
+            x_ski_min = float(np.min(valid_left)) - tool_radius
+            x_ski_max = float(np.max(valid_right)) + tool_radius
             x_ski_passes = np.arange(x_ski_min, x_ski_max + profile_params.stepover, profile_params.stepover)
 
-            for pass_depth, is_finish in passes:
-                for i, x_ski in enumerate(x_ski_passes):
-                    bx_start, by = ski_to_blank(core_start, x_ski + core_y_across)
-                    bx_end, _ = ski_to_blank(core_end, x_ski + core_y_across)
+            # Natural traversal order for each half — always working inward
+            tip_natural = np.arange(0, split_idx + 1)           # tip → center
+            tail_natural = np.arange(len(y_samps) - 1, split_idx - 1, -1)  # tail → center
 
-                    # Plunge at start
-                    rapid(bx_start, by, profile_params.clearance_height)
-                    z_start = -blank.thickness + h_core_samples[0] + (pass_depth if not is_finish else 0)
-                    feed_move(bx_start, by, z_start, profile_params.plunge_feed)
+            for z_flat, is_finish, z_flat_prev in passes:
+                for x_ski in x_ski_passes:
+                    _, by = ski_to_blank(y_samps[0], x_ski + core_y_across)
 
-                    # Traverse along Y, Z following core contour
-                    ys = y_thickness_samples if i % 2 == 0 else y_thickness_samples[::-1]
-                    for j, y_ski in enumerate(ys):
-                        bx, _ = ski_to_blank(y_ski, x_ski + core_y_across)
-                        # Core surface Z = blank.thickness - h_core(y)
-                        # Tool position: go down pass_depth below surface (roughing) or to surface (finish)
-                        h_idx = np.searchsorted(y_thickness_samples, y_ski)
-                        h_idx = np.clip(h_idx, 0, len(h_core_samples) - 1)
-                        h_core = h_core_samples[h_idx]
-                        z_surface = -blank.thickness + h_core
-                        z_target = z_surface + (pass_depth if not is_finish else 0)
-                        feed_move(bx, by, z_target, profile_params.cutting_feed)
-
-                    rapid(bx_end if i % 2 == 0 else bx_start, by, profile_params.clearance_height)
+                    for half_natural in (tip_natural, tail_natural):
+                        half = useful_indices(half_natural, z_flat, is_finish, z_flat_prev)
+                        if len(half) < 2:
+                            continue
+                        bx0, _ = ski_to_blank(y_samps[half[0]], x_ski + core_y_across)
+                        rapid(bx0, by, profile_params.clearance_height)
+                        feed_move(bx0, by, z_target_at(half[0], z_flat, is_finish), profile_params.plunge_feed)
+                        for idx in half[1:]:
+                            bx, _ = ski_to_blank(y_samps[idx], x_ski + core_y_across)
+                            feed_move(bx, by, z_target_at(idx, z_flat, is_finish), profile_params.cutting_feed)
+                        bx_end, _ = ski_to_blank(y_samps[half[-1]], x_ski + core_y_across)
+                        rapid(bx_end, by, profile_params.clearance_height)
 
         else:
-            # Passes run across the ski (blank Y axis), spaced along length (blank X axis)
-            y_ski_passes = np.arange(core_start, core_end + profile_params.stepover, profile_params.stepover)
-            x_ski_samples = np.linspace(x_ski_min, x_ski_max, max(10, int((x_ski_max - x_ski_min) / (profile_params.stepover/2))))
+            # "across" direction: passes run across the ski width at each Y position.
+            # Split into tip half (core_start → center) and tail half (core_end → center)
+            # so the tool always machines uphill toward the thicker center.
+            # Roughing passes stop when the core surface protrudes above the flat cut depth.
+            # For "both" cutting direction, adjacent passes share a turnaround point so the
+            # tool links directly without retracting between passes within each half.
+            tip_y_passes = np.arange(core_start, y_split + profile_params.stepover, profile_params.stepover)
+            tail_y_passes = np.arange(core_end, y_split - profile_params.stepover, -profile_params.stepover)
 
-            for pass_depth, is_finish in passes:
-                for i, y_ski in enumerate(y_ski_passes):
-                    bx, by_start = ski_to_blank(y_ski, x_ski_min + core_y_across)
-                    _, by_end = ski_to_blank(y_ski, x_ski_max + core_y_across)
+            for z_flat, is_finish, z_flat_prev in passes:
+                for half_y_passes in (tip_y_passes, tail_y_passes):
+                    prev_end_bx: float | None = None
+                    prev_end_by: float | None = None
 
-                    # Plunge at start
-                    rapid(bx, by_start, profile_params.clearance_height)
-                    h_idx = np.searchsorted(y_thickness_samples, y_ski)
-                    h_idx = np.clip(h_idx, 0, len(h_core_samples) - 1)
-                    h_core = h_core_samples[h_idx]
-                    z_surface = -blank.thickness + h_core
-                    z_start = z_surface + (pass_depth if not is_finish else 0)
-                    feed_move(bx, by_start, z_start, profile_params.plunge_feed)
+                    for i, y_ski in enumerate(half_y_passes):
+                        h_idx = int(np.clip(np.searchsorted(y_samps, y_ski), 0, len(h_samps) - 1))
 
-                    # Traverse across Y, Z constant for this Y position
-                    xs = x_ski_samples if i % 2 == 0 else x_ski_samples[::-1]
-                    for x_ski in xs:
-                        _, by = ski_to_blank(y_ski, x_ski + core_y_across)
-                        z_target = z_surface + (pass_depth if not is_finish else 0)
-                        feed_move(bx, by, z_target, profile_params.cutting_feed)
+                        # Width from actual outline at this Y position
+                        y_clamped = float(np.clip(y_ski, outline_y_min, outline_y_max))
+                        l_arr, r_arr = half_widths_at_y(geom.outline, np.array([y_clamped]))
+                        if np.isnan(l_arr[0]) or np.isnan(r_arr[0]):
+                            prev_end_bx = prev_end_by = None
+                            continue
+                        x_ski_min = float(l_arr[0]) - tool_radius
+                        x_ski_max = float(r_arr[0]) + tool_radius
+                        n_pts = max(10, int((x_ski_max - x_ski_min) / (profile_params.stepover / 2)))
+                        x_ski_samples = np.linspace(x_ski_min, x_ski_max, n_pts)
 
-                    rapid(bx, by_end if i % 2 == 0 else by_start, profile_params.clearance_height)
+                        z_cut = z_target_at(h_idx, z_flat, is_finish)
+
+                        # Stop when the surface+allowance has risen to the previous pass depth —
+                        # that region was already cleared. All remaining positions are thicker.
+                        if not is_finish and z_cut >= z_flat_prev - 0.01:
+                            break
+
+                        should_reverse = i % 2 == 1
+                        if profile_params.cutting_direction == "conventional":
+                            should_reverse = False
+                        elif profile_params.cutting_direction == "climb":
+                            should_reverse = True
+
+                        xs = x_ski_samples[::-1] if should_reverse else x_ski_samples
+                        bx, by_start = ski_to_blank(y_ski, float(xs[0]) + core_y_across)
+
+                        # For "both" mode: adjacent passes share a turnaround point — link directly
+                        use_link = (
+                            profile_params.cutting_direction == "both"
+                            and prev_end_bx is not None
+                        )
+                        if use_link:
+                            feed_move(bx, by_start, z_cut, profile_params.cutting_feed)
+                        else:
+                            if prev_end_bx is not None:
+                                rapid(prev_end_bx, prev_end_by, profile_params.clearance_height)
+                            rapid(bx, by_start, profile_params.clearance_height)
+                            feed_move(bx, by_start, z_cut, profile_params.plunge_feed)
+
+                        for x_ski in xs[1:]:
+                            _, by = ski_to_blank(y_ski, float(x_ski) + core_y_across)
+                            feed_move(bx, by, z_cut, profile_params.cutting_feed)
+
+                        prev_end_bx = bx
+                        _, prev_end_by = ski_to_blank(y_ski, float(xs[-1]) + core_y_across)
+
+                    # Retract after each half
+                    if prev_end_bx is not None:
+                        rapid(prev_end_bx, prev_end_by, profile_params.clearance_height)
 
     gcode += [f"G00 Z{profile_params.clearance_height:.3f}", "M05", "M30"]
     return "\n".join(gcode), moves
