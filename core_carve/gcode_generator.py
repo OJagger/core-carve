@@ -59,6 +59,7 @@ def generate_slot_gcode(
     blank,
     slot_params: SlotParams,
     x_offset: float = 0.0,
+    progress_callback=None,
 ) -> tuple[str, list[Move]]:
     """
     Generate G-code for sidewall slots and return moves list for visualization.
@@ -147,6 +148,8 @@ def generate_slot_gcode(
     # Generate toolpaths, alternating direction to minimize rapids between slots
     for depth_pass in range(n_depth_passes):
         z_target = -min((depth_pass + 1) * slot_params.depth_per_pass, slot_depth)
+        if progress_callback:
+            progress_callback(int(100 * depth_pass / n_depth_passes))
 
         for width_offset in width_offsets:
             for slot_idx, (slot_y_samples, slot_centerline) in enumerate(slots):

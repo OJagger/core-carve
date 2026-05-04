@@ -358,14 +358,6 @@ class CamberParameterPanel(QWidget):
         mould_lay.addRow(self.btn_generate_gcode)
         root.addWidget(mould_group)
 
-        button_lay = QHBoxLayout()
-        self.btn_load_params = QPushButton("Load params…")
-        self.btn_save_params = QPushButton("Save params…")
-        button_lay.addWidget(self.btn_load_params)
-        button_lay.addWidget(self.btn_save_params)
-        button_lay.addStretch()
-        root.addLayout(button_lay)
-
         self.lbl_status = QLabel("✓ Ready")
         self.lbl_status.setStyleSheet("color: #60cc60;")
         root.addWidget(self.lbl_status)
@@ -456,17 +448,7 @@ class CamberTab(QWidget):
         self.panel.sb_mould_y.valueChanged.connect(self._update_mould)
         self.panel.btn_export_dxf.clicked.connect(self._export_mould_dxf)
         self.panel.btn_generate_gcode.clicked.connect(self._generate_mould_gcode)
-        self.panel.btn_load_params.clicked.connect(self._load_params)
-        self.panel.btn_save_params.clicked.connect(self._save_params)
-        self._load_ski_callback = None
-        self._save_ski_callback = None
         self._materials_db = MaterialDatabase()
-
-    def set_load_ski_callback(self, fn):
-        self._load_ski_callback = fn
-
-    def set_save_ski_callback(self, fn):
-        self._save_ski_callback = fn
 
     def set_ski_length(self, ski_length: float):
         self._ski_length = ski_length
@@ -487,42 +469,6 @@ class CamberTab(QWidget):
         except Exception as e:
             self.panel.lbl_status.setText(f"✗ Error: {str(e)}")
             self.panel.lbl_status.setStyleSheet("color: #ff6060;")
-
-    def _load_params(self):
-        if self._load_ski_callback is not None:
-            path, _ = QFileDialog.getOpenFileName(
-                self, "Load Ski Definition", "", "JSON Files (*.json);;All Files (*)"
-            )
-            if path:
-                self._load_ski_callback(path)
-            return
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load Parameters", "", "JSON Files (*.json);;All Files (*)"
-        )
-        if not path:
-            return
-        try:
-            params = CamberParams.from_json(path)
-            self.panel.set_params(params)
-            self._update_preview()
-        except Exception as e:
-            QMessageBox.critical(self, "Load Error", str(e))
-
-    def _save_params(self):
-        if self._save_ski_callback is not None:
-            self._save_ski_callback()
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Parameters", "camber_params.json",
-            "JSON Files (*.json);;All Files (*)"
-        )
-        if not path:
-            return
-        try:
-            self.panel.get_params().to_json(path)
-            QMessageBox.information(self, "Saved", f"Parameters saved to {Path(path).name}")
-        except Exception as e:
-            QMessageBox.critical(self, "Save Error", str(e))
 
     def _update_mould(self):
         """Update mould visualization when position changes."""

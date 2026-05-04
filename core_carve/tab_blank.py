@@ -259,6 +259,24 @@ class BlankParameterPanel(QWidget):
 
         root.addStretch()
 
+    def set_blank(self, blank: CoreBlank):
+        self.f_blank_length.setText(str(blank.length))
+        self.f_blank_width.setText(str(blank.width))
+        self.f_blank_thickness.setText(str(blank.thickness))
+        idx = self.combo_num_cores.findData(blank.num_cores)
+        if idx >= 0:
+            self.combo_num_cores.setCurrentIndex(idx)
+        idx = self.combo_orientation.findData(blank.machine_orientation)
+        if idx >= 0:
+            self.combo_orientation.setCurrentIndex(idx)
+        idx = self.combo_origin.findData(blank.origin_corner)
+        if idx >= 0:
+            self.combo_origin.setCurrentIndex(idx)
+        self.f_pos_offset_x.setText(str(blank.position_offset_x))
+        self.f_pos_offset_y.setText(str(blank.position_offset_y))
+        if blank.core_spacing is not None:
+            self.f_core_spacing.setText(str(blank.core_spacing))
+
     def get_blank(self) -> CoreBlank:
         # Use calculated spacing if not explicitly set by user
         spacing = self.f_core_spacing.value()

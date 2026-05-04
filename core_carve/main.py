@@ -1,6 +1,8 @@
 import json
 import sys
-from PyQt5.QtWidgets import QApplication, QMainWindow, QTabWidget, QFileDialog, QMessageBox
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QTabWidget, QFileDialog, QMessageBox, QToolBar, QAction
+)
 from PyQt5.QtCore import Qt
 
 from core_carve.tab_design import DesignTab
@@ -19,6 +21,24 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Core Carve — SkiNC G-code Generator")
         self.resize(1400, 900)
 
+        # Toolbar with load/save ski actions
+        toolbar = QToolBar("Ski File")
+        toolbar.setMovable(False)
+        self.addToolBar(toolbar)
+        act_open = QAction("Open Ski…", self)
+        act_open.setShortcut("Ctrl+O")
+        act_open.triggered.connect(self._open_ski_dialog)
+        toolbar.addAction(act_open)
+        act_save = QAction("Save Ski", self)
+        act_save.setShortcut("Ctrl+S")
+        act_save.triggered.connect(self._save_ski_file)
+        toolbar.addAction(act_save)
+        act_save_as = QAction("Save Ski As…", self)
+        act_save_as.setShortcut("Ctrl+Shift+S")
+        act_save_as.triggered.connect(lambda: self._save_ski_file(path=None))
+        toolbar.addAction(act_save_as)
+        self._current_ski_path: str | None = None
+
         self.tabs = QTabWidget()
         self.tabs.setTabPosition(QTabWidget.North)
         self.setCentralWidget(self.tabs)
@@ -26,22 +46,15 @@ class MainWindow(QMainWindow):
         self.design_tab = DesignTab()
         self.tabs.addTab(self.design_tab, "Outline Design")
         self.design_tab.set_outline_callback(self._receive_designed_outline)
-        self.design_tab.set_ski_definition_loaded_callback(self._load_ski_definition)
 
         self.base_tab = BaseTab()
         self.tabs.addTab(self.base_tab, "Base Design")
-        self.base_tab.set_load_ski_callback(self._load_ski_definition)
-        self.base_tab.set_save_ski_callback(self._save_ski_file)
 
         self.geometry_tab = GeometryTab()
         self.tabs.addTab(self.geometry_tab, "Core Design")
-        self.geometry_tab.set_load_ski_callback(self._load_ski_definition)
-        self.geometry_tab.set_save_ski_callback(self._save_ski_file)
 
         self.camber_tab = CamberTab()
         self.tabs.addTab(self.camber_tab, "Camber Design")
-        self.camber_tab.set_load_ski_callback(self._load_ski_definition)
-        self.camber_tab.set_save_ski_callback(self._save_ski_file)
 
         self.materials_tab = MaterialsTab()
         self.tabs.addTab(self.materials_tab, "Materials & Stiffness")
@@ -50,6 +63,7 @@ class MainWindow(QMainWindow):
         self.blank_tab = None
         self.gcode_tab = None
         self.profile_tab = None
+        self._geometry_dirty = False
 
         # Splitters whose vis-pane size is kept in sync across all tabs
         self._viz_splitters = [
@@ -88,8 +102,19 @@ class MainWindow(QMainWindow):
         finally:
             self._syncing_splitters = False
 
+    def _open_ski_dialog(self):
+        """Show file dialog then load the chosen ski definition."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open Ski Definition", "",
+            "JSON Files (*.json);;All Files (*)"
+        )
+        if path:
+            self._load_ski_definition(path)
+
     def _save_ski_file(self, path: str = None):
         """Save all ski params to one hierarchical JSON file."""
+        if path is None:
+            path = self._current_ski_path
         if path is None:
             path, _ = QFileDialog.getSaveFileName(
                 self, "Save Ski Definition", "ski_params.json",
@@ -99,14 +124,34 @@ class MainWindow(QMainWindow):
             return
         try:
             from dataclasses import asdict
+            from core_carve.core_blank import MachineOrientation, OriginCorner
             ski_data = {
                 "outline": self.design_tab.panel.get_params().to_dict(),
                 "base": self.base_tab.panel.get_params().to_dict(),
                 "camber": self.camber_tab.panel.get_params().to_dict(),
                 "core": asdict(self.geometry_tab.panel.get_params()),
             }
+            # Save blank/slot/profile params if those tabs exist
+            if self.blank_tab is not None:
+                blank = self.blank_tab.panel.get_blank()
+                ski_data["blank"] = {
+                    "length": blank.length,
+                    "width": blank.width,
+                    "thickness": blank.thickness,
+                    "num_cores": blank.num_cores,
+                    "machine_orientation": blank.machine_orientation.name,
+                    "origin_corner": blank.origin_corner.name,
+                    "position_offset_x": blank.position_offset_x,
+                    "position_offset_y": blank.position_offset_y,
+                    "core_spacing": blank.core_spacing,
+                }
+            if self.gcode_tab is not None:
+                ski_data["slot"] = asdict(self.gcode_tab.panel.get_params())
+            if self.profile_tab is not None:
+                ski_data["profile"] = asdict(self.profile_tab.panel.get_params())
             with open(path, "w") as f:
                 json.dump(ski_data, f, indent=2)
+            self._current_ski_path = path
         except Exception as exc:
             QMessageBox.critical(self, "Save Error", str(exc))
 
@@ -153,11 +198,42 @@ class MainWindow(QMainWindow):
                 self.geometry_tab._update_geometry()
 
             # Create / update downstream tabs (blank, gcode, profile) and sync camber length
+            self._geometry_dirty = True
             self._check_geometry_loaded()
             if self.geometry_tab._geom is not None:
                 self.camber_tab.set_ski_length(self.geometry_tab._geom.ski_length)
                 self.camber_tab.set_geometry(self.geometry_tab._geom, self.geometry_tab.panel.get_params())
 
+            # Populate blank/slot/profile tabs if they exist
+            if "blank" in ski_data and self.blank_tab is not None:
+                from core_carve.core_blank import CoreBlank, MachineOrientation, OriginCorner
+                bd = ski_data["blank"]
+                blank = CoreBlank(
+                    length=bd["length"],
+                    width=bd["width"],
+                    thickness=bd["thickness"],
+                    num_cores=bd["num_cores"],
+                    machine_orientation=MachineOrientation[bd["machine_orientation"]],
+                    origin_corner=OriginCorner[bd["origin_corner"]],
+                    position_offset_x=bd.get("position_offset_x", 0.0),
+                    position_offset_y=bd.get("position_offset_y", 0.0),
+                    core_spacing=bd.get("core_spacing"),
+                )
+                self.blank_tab.panel.set_blank(blank)
+            if "slot" in ski_data and self.gcode_tab is not None:
+                from core_carve.gcode_generator import SlotParams
+                sp = ski_data["slot"]
+                self.gcode_tab.panel.set_params(
+                    SlotParams(**{k: v for k, v in sp.items() if k in SlotParams.__dataclass_fields__})
+                )
+            if "profile" in ski_data and self.profile_tab is not None:
+                from core_carve.profile_generator import ProfileParams
+                pp = ski_data["profile"]
+                self.profile_tab.panel.set_params(
+                    ProfileParams(**{k: v for k, v in pp.items() if k in ProfileParams.__dataclass_fields__})
+                )
+
+            self._current_ski_path = path
             return True
         except Exception as e:
             QMessageBox.critical(self, "Load Error", f"Failed to load ski definition: {str(e)}")
@@ -168,6 +244,7 @@ class MainWindow(QMainWindow):
         self.base_tab.set_outline(outline)
         self.geometry_tab._outline = outline
         self.geometry_tab._update_geometry()
+        self._geometry_dirty = True
         self.tabs.setCurrentWidget(self.base_tab)
 
     def _check_geometry_loaded(self):
@@ -203,14 +280,16 @@ class MainWindow(QMainWindow):
         else:
             self.blank_tab.geom = self.geometry_tab._geom
             self.blank_tab.params = params
-            self.blank_tab._update_layout()
             self.gcode_tab.geom = self.geometry_tab._geom
             self.gcode_tab.params = params
             self.profile_tab.geom = self.geometry_tab._geom
             self.profile_tab.params = params
-            self.camber_tab.set_ski_length(self.geometry_tab._geom.ski_length)
-            self.camber_tab.set_geometry(self.geometry_tab._geom, self.geometry_tab.panel.get_params())
-            self.materials_tab.set_geometry(self.geometry_tab._geom, self.geometry_tab.panel.get_params())
+            if self._geometry_dirty:
+                self.blank_tab._update_layout()
+                self.camber_tab.set_ski_length(self.geometry_tab._geom.ski_length)
+                self.camber_tab.set_geometry(self.geometry_tab._geom, self.geometry_tab.panel.get_params())
+                self.materials_tab.set_geometry(self.geometry_tab._geom, self.geometry_tab.panel.get_params())
+                self._geometry_dirty = False
 
 
 def main():

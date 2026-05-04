@@ -23,6 +23,7 @@ from core_carve.ski_geometry import SkiGeometry, half_widths_at_y
 class _GcodeWorker(QThread):
     finished = pyqtSignal(str, list)
     error = pyqtSignal(str)
+    progress = pyqtSignal(int)
 
     def __init__(self, fn, *args):
         super().__init__()
@@ -31,7 +32,7 @@ class _GcodeWorker(QThread):
 
     def run(self):
         try:
-            result = self._fn(*self._args)
+            result = self._fn(*self._args, progress_callback=self.progress.emit)
             self.finished.emit(*result)
         except Exception as e:
             self.error.emit(str(e))
@@ -651,7 +652,8 @@ class SlotParameterPanel(QWidget):
         root.addWidget(self.lbl_validation)
 
         self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 0)   # indeterminate
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
         self.progress_bar.setVisible(False)
         self.progress_bar.setFixedHeight(12)
         root.addWidget(self.progress_bar)
@@ -848,6 +850,7 @@ class GcodeTab(QWidget):
         )
         self._worker.finished.connect(self._on_gcode_ready)
         self._worker.error.connect(self._on_gcode_error)
+        self._worker.progress.connect(self.panel.progress_bar.setValue)
         self._worker.start()
 
     def _on_gcode_ready(self, gcode_string: str, moves: list):

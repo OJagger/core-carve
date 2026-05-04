@@ -344,14 +344,8 @@ class DesignPanel(QWidget):
         root.addWidget(tail_arms)
 
         # Actions
-        btn = QHBoxLayout()
-        self.btn_load = QPushButton("Load ski")
-        self.btn_save = QPushButton("Save ski")
         self.btn_use  = QPushButton("Use as Planform →")
         self.btn_use.setStyleSheet("font-weight:bold;")
-        btn.addWidget(self.btn_load)
-        btn.addWidget(self.btn_save)
-        root.addLayout(btn)
         root.addWidget(self.btn_use)
         root.addStretch()
 
@@ -421,8 +415,6 @@ class DesignTab(QWidget):
         super().__init__(parent)
         self._result: Optional[SkiOutlineResult] = None
         self._on_outline_ready: Optional[Callable] = None
-        self._on_ski_definition_loaded: Optional[Callable] = None
-
         # Drag state
         self._drag_type:    Optional[str] = None  # _DRAG_CTRL or _DRAG_LINE
         self._drag_ctrl_idx: Optional[int] = None
@@ -458,8 +450,6 @@ class DesignTab(QWidget):
     def _connect_signals(self):
         for f in self.panel.all_fields():
             f.textChanged.connect(self._update)
-        self.panel.btn_load.clicked.connect(self._load_json)
-        self.panel.btn_save.clicked.connect(self._save_json)
         self.panel.btn_use.clicked.connect(self._use_as_planform)
         self.canvas.connect_events(self._on_press, self._on_motion, self._on_release)
 
@@ -652,45 +642,6 @@ class DesignTab(QWidget):
             # Redraw at full resolution and update derived labels
             self._update(quick=False)
 
-    # ── JSON I/O ──────────────────────────────────────────────────────────────
-
-    def _load_json(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load Ski Definition JSON", "", "JSON Files (*.json)"
-        )
-        if not path:
-            return
-        try:
-            import json
-            with open(path) as f:
-                data = json.load(f)
-
-            # Check if this is a full ski definition
-            is_full_definition = any(k in data for k in ["outline", "core", "base", "camber"])
-
-            if is_full_definition and self._on_ski_definition_loaded is not None:
-                # Let main window handle full definition
-                self._on_ski_definition_loaded(path)
-            else:
-                # Just load outline params
-                p = SkiPlanformParams.from_json(path)
-                self._update_from_params(p)
-        except Exception as e:
-            from PyQt5.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Load Failed", str(e))
-
-    def _save_json(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Ski Definition JSON", "", "JSON Files (*.json)"
-        )
-        if not path:
-            return
-        try:
-            self.panel.get_params().save_to_json(path)
-        except Exception as e:
-            from PyQt5.QtWidgets import QMessageBox
-            QMessageBox.warning(self, "Save Failed", str(e))
-
     # ── DXF export ────────────────────────────────────────────────────────────
 
     def _export_dxf(self):
@@ -716,9 +667,6 @@ class DesignTab(QWidget):
 
     def set_outline_callback(self, fn: Callable) -> None:
         self._on_outline_ready = fn
-
-    def set_ski_definition_loaded_callback(self, fn: Callable) -> None:
-        self._on_ski_definition_loaded = fn
 
     def _use_as_planform(self):
         if self._result is not None and self._on_outline_ready is not None:

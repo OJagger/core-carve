@@ -160,11 +160,7 @@ class ParameterPanel(QWidget):
         self.lbl_dxf = QLabel("No file loaded")
         self.lbl_dxf.setStyleSheet("color: #888;")
 
-        self.btn_load_json = QPushButton("Load ski")
-        self.btn_save_json = QPushButton("Save ski")
-
-        for w in (self.btn_load_dxf, self.lbl_dxf,
-                  self.btn_load_json, self.btn_save_json):
+        for w in (self.btn_load_dxf, self.lbl_dxf):
             file_lay.addWidget(w)
         file_lay.addStretch()
         root.addWidget(file_group)
@@ -313,17 +309,7 @@ class GeometryTab(QWidget):
 
     def _connect_signals(self):
         self.panel.btn_load_dxf.clicked.connect(self._load_dxf)
-        self.panel.btn_load_json.clicked.connect(self._load_json)
-        self.panel.btn_save_json.clicked.connect(self._save_json)
         self.panel.btn_update.clicked.connect(self._update_geometry)
-        self._load_ski_callback = None
-        self._save_ski_callback = None
-
-    def set_load_ski_callback(self, fn):
-        self._load_ski_callback = fn
-
-    def set_save_ski_callback(self, fn):
-        self._save_ski_callback = fn
 
     def load_test_files(self):
         """Auto-load test DXF and JSON files (for development)."""
@@ -363,41 +349,6 @@ class GeometryTab(QWidget):
         except Exception as exc:
             QMessageBox.critical(self, "DXF Error", str(exc))
 
-    def _load_json(self):
-        if self._load_ski_callback is not None:
-            path, _ = QFileDialog.getOpenFileName(
-                self, "Load Ski Definition", "", "JSON Files (*.json);;All Files (*)"
-            )
-            if path:
-                self._load_ski_callback(path)
-            return
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Open Parameters JSON", "", "JSON Files (*.json);;All Files (*)"
-        )
-        if not path:
-            return
-        try:
-            params = SkiParams.from_json(path)
-            self.panel.set_params(params)
-            self._update_geometry()
-        except Exception as exc:
-            QMessageBox.critical(self, "JSON Error", str(exc))
-
-    def _save_json(self):
-        if self._save_ski_callback is not None:
-            self._save_ski_callback()
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Parameters JSON", "ski_params.json",
-            "JSON Files (*.json);;All Files (*)"
-        )
-        if not path:
-            return
-        try:
-            self.panel.get_params().to_json(path)
-        except Exception as exc:
-            QMessageBox.critical(self, "Save Error", str(exc))
-
     def _update_geometry(self):
         if self._outline is None:
             return
@@ -410,6 +361,7 @@ class GeometryTab(QWidget):
             parent = self.parent()
             while parent:
                 if hasattr(parent, '_check_geometry_loaded'):
+                    parent._geometry_dirty = True
                     parent._check_geometry_loaded()
                     break
                 parent = parent.parent()

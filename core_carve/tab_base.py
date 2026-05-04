@@ -181,14 +181,10 @@ class BaseParameterPanel(QWidget):
 
         # ── Buttons ──────────────────────────────────────────────────────────
         button_lay = QHBoxLayout()
-        self.btn_load_params = QPushButton("Load params…")
-        self.btn_save_params = QPushButton("Save params…")
         self.btn_export_dxf = QPushButton("Export DXF…")
         self.btn_generate_gcode = QPushButton("Generate G-code")
         self.btn_save_gcode = QPushButton("Save G-code…")
 
-        button_lay.addWidget(self.btn_load_params)
-        button_lay.addWidget(self.btn_save_params)
         button_lay.addStretch()
         button_lay.addWidget(self.btn_export_dxf)
         button_lay.addWidget(self.btn_generate_gcode)
@@ -287,18 +283,8 @@ class BaseTab(QWidget):
         self.panel.f_tail_offset.textChanged.connect(self._update_preview)
 
         self.panel.btn_export_dxf.clicked.connect(self._export_dxf)
-        self.panel.btn_load_params.clicked.connect(self._load_params)
-        self.panel.btn_save_params.clicked.connect(self._save_params)
         self.panel.btn_generate_gcode.clicked.connect(self._generate_gcode)
         self.panel.btn_save_gcode.clicked.connect(self._save_gcode)
-        self._load_ski_callback = None
-        self._save_ski_callback = None
-
-    def set_load_ski_callback(self, fn):
-        self._load_ski_callback = fn
-
-    def set_save_ski_callback(self, fn):
-        self._save_ski_callback = fn
 
     def set_outline(self, outline):
         self._outline = outline
@@ -382,38 +368,3 @@ class BaseTab(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Save Error", str(e))
 
-    def _load_params(self):
-        if self._load_ski_callback is not None:
-            path, _ = QFileDialog.getOpenFileName(
-                self, "Load Ski Definition", "", "JSON Files (*.json);;All Files (*)"
-            )
-            if path:
-                self._load_ski_callback(path)
-            return
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Load Parameters", "", "JSON Files (*.json);;All Files (*)"
-        )
-        if not path:
-            return
-        try:
-            params = BaseParams.from_json(path)
-            self.panel.set_params(params)
-            self._update_preview()
-        except Exception as e:
-            QMessageBox.critical(self, "Load Error", str(e))
-
-    def _save_params(self):
-        if self._save_ski_callback is not None:
-            self._save_ski_callback()
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save Parameters", "base_params.json",
-            "JSON Files (*.json);;All Files (*)"
-        )
-        if not path:
-            return
-        try:
-            self.panel.get_params().to_json(path)
-            QMessageBox.information(self, "Saved", f"Parameters saved to {Path(path).name}")
-        except Exception as e:
-            QMessageBox.critical(self, "Save Error", str(e))

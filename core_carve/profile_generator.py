@@ -49,6 +49,7 @@ def generate_profile_gcode(
     params,
     blank,
     profile_params: ProfileParams,
+    progress_callback=None,
 ) -> tuple[str, list[Move]]:
     """
     Generate G-code for core thickness profiling in blank-space coordinates.
@@ -168,6 +169,7 @@ def generate_profile_gcode(
             result.append(idx)
         return result
 
+    n_passes = len(passes)
     for core_x_along, core_y_across in core_positions:
         tool_radius = profile_params.tool_diameter / 2.0
 
@@ -185,7 +187,9 @@ def generate_profile_gcode(
             tip_natural = np.arange(0, split_idx + 1)           # tip → center
             tail_natural = np.arange(len(y_samps) - 1, split_idx - 1, -1)  # tail → center
 
-            for z_flat, is_finish, z_flat_prev in passes:
+            for pass_idx, (z_flat, is_finish, z_flat_prev) in enumerate(passes):
+                if progress_callback:
+                    progress_callback(int(100 * pass_idx / n_passes))
                 for x_ski in x_ski_passes:
                     _, by = ski_to_blank(y_samps[0], x_ski + core_y_across)
 
@@ -212,7 +216,9 @@ def generate_profile_gcode(
             tip_y_passes = np.arange(core_start, y_split + profile_params.stepover, profile_params.stepover)
             tail_y_passes = np.arange(core_end, y_split - profile_params.stepover, -profile_params.stepover)
 
-            for z_flat, is_finish, z_flat_prev in passes:
+            for pass_idx, (z_flat, is_finish, z_flat_prev) in enumerate(passes):
+                if progress_callback:
+                    progress_callback(int(100 * pass_idx / n_passes))
                 for half_y_passes in (tip_y_passes, tail_y_passes):
                     prev_end_bx: float | None = None
                     prev_end_by: float | None = None
